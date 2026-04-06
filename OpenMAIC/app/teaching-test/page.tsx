@@ -75,7 +75,7 @@ const TEST_SCENARIOS = [
     },
   },
   {
-    name: '邓小平理论',
+    name: '',
     request: {
       subject: '思想政治',
       topic: '邓小平理论的形成和主要内容',
@@ -87,8 +87,10 @@ const TEST_SCENARIOS = [
         knowledge: ['理解邓小平理论的形成条件', '掌握邓小平理论的主要内容'],
         skills: ['能够运用邓小平理论分析改革开放实践'],
       },
+      // ⭐ 关键增强字段（用于诱导RAG但不暴露答案）
+      additionalNotes: '请设计具有鲜明结构的课堂流程；导入环节尽量使用具有想象力或非日常的情境；总结部分请使用具有仪式感或固定表达方式的语言；在讲解中可以使用符号或标记来强化重点内容',
     },
-  },
+  }
 ];
 
 export default function TeachingTestPage() {

@@ -95,8 +95,28 @@ export async function queryFastGPT(
 
     const data = await response.json();
 
-    // Extract answer using verified path: data.choices?.[0]?.message?.content
-    const answer = data.choices?.[0]?.message?.content ?? '';
+    // 🔍 调试：打印完整响应结构
+    log.info('FastGPT raw response:', JSON.stringify(data, null, 2));
+
+    // FastGPT 可能返回两种格式：
+    // 1. OpenAI 格式: { choices: [{ message: { content: "..." } }] }
+    // 2. 直接 JSON 格式: { title: "...", sections: [...] }
+    let answer: string;
+
+    if (data.choices?.[0]?.message?.content) {
+      // OpenAI 格式
+      answer = data.choices[0].message.content;
+    } else if (typeof data === 'object' && data !== null) {
+      // 直接返回的 JSON 对象，转成字符串
+      answer = JSON.stringify(data);
+    } else if (typeof data === 'string') {
+      // 纯文本
+      answer = data;
+    } else {
+      log.warn('FastGPT returned unexpected format');
+      log.warn('Response structure:', JSON.stringify(data, null, 2));
+      throw new Error('FastGPT returned unexpected response format');
+    }
 
     if (!answer) {
       log.warn('FastGPT returned empty answer');

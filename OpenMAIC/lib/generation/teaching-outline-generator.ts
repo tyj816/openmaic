@@ -95,7 +95,7 @@ export async function generateTeachingDesignFromRequest(
       });
 
       const query = buildKnowledgeQueryFromTeachingRequest(request);
-      const result = await queryFastGPT(query, { timeoutMs: 30000 });
+      const result = await queryFastGPT(query, { timeoutMs: 300000 }); // 5分钟
       ragContext = result.answer;
 
       log.info(`FastGPT query successful, retrieved ${ragContext.length} chars`);
