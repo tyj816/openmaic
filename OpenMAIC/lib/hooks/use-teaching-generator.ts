@@ -12,7 +12,7 @@
 import { useState, useCallback } from 'react';
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
-import type { TeachingRequest, TeachingDesign, ParsedImage } from '@/lib/types/teaching';
+import type { TeachingRequest, TeachingDesign, ReferenceMaterial } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 
@@ -20,8 +20,7 @@ const log = createLogger('TeachingGenerator');
 
 export interface TeachingGeneratorOptions {
   model: LanguageModel;
-  pdfText?: string;
-  pdfImages?: ParsedImage[];
+  materials?: ReferenceMaterial[];
   imageMapping?: ImageMapping;
   visionEnabled?: boolean;
   researchContext?: string;
@@ -77,8 +76,7 @@ export function useTeachingGenerator() {
           },
           body: JSON.stringify({
             request,
-            pdfText: options.pdfText,
-            pdfImages: options.pdfImages,
+            materials: options.materials,
             imageMapping: options.imageMapping,
             visionEnabled: options.visionEnabled,
             researchContext: options.researchContext,
@@ -126,7 +124,7 @@ export function useTeachingGenerator() {
             },
             body: JSON.stringify({
               slide,
-              assignedImages: options.pdfImages,
+              assignedImages: options.materials?.flatMap(m => m.parsedImages || []),
               imageMapping: options.imageMapping,
               visionEnabled: options.visionEnabled,
               language: request.language,

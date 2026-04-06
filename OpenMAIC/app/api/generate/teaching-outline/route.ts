@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { generateTeachingDesignFromRequest } from '@/lib/generation/teaching-outline-generator';
-import type { TeachingRequest, ParsedImage } from '@/lib/types/teaching';
+import type { TeachingRequest, ReferenceMaterial } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
 import { generateText } from 'ai';
 import type { AICallFn, GenerationCallbacks } from '@/lib/generation/pipeline-types';
@@ -17,8 +17,7 @@ const log = createLogger('TeachingOutlineAPI');
 
 export interface TeachingOutlineRequest {
   request: TeachingRequest;
-  pdfText?: string;
-  pdfImages?: ParsedImage[];
+  materials?: ReferenceMaterial[];
   imageMapping?: ImageMapping;
   visionEnabled?: boolean;
   researchContext?: string;
@@ -34,8 +33,7 @@ export async function POST(request: NextRequest) {
     const body: TeachingOutlineRequest = await request.json();
     const { 
       request: teachingRequest, 
-      pdfText, 
-      pdfImages, 
+      materials,
       imageMapping, 
       visionEnabled, 
       researchContext,
@@ -102,12 +100,12 @@ export async function POST(request: NextRequest) {
       },
     };
 
-    // Generate teaching design outline
+    // Generate teaching design outline with three-source fusion
     log.info(`Generating teaching design outline for: ${teachingRequest.topic}`);
+    log.info(`Materials provided: ${materials?.length || 0}`);
     const designResult = await generateTeachingDesignFromRequest(
       teachingRequest,
-      pdfText,
-      pdfImages,
+      materials,
       aiCall,
       callbacks,
       {

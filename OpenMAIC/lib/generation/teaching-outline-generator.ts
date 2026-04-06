@@ -7,13 +7,15 @@
 
 import { nanoid } from 'nanoid';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
-import type { TeachingRequest, TeachingDesign, ParsedImage } from '@/lib/types/teaching';
+import type { TeachingRequest, TeachingDesign, ParsedImage, ReferenceMaterial } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
 import type { AICallFn, GenerationResult, GenerationCallbacks } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
 import { queryFastGPT } from '@/lib/ai/fastgpt-client';
+import { parseTeachingMaterials } from './teaching-material-parser';
+import { buildTeachingContextBundle } from './teaching-context-builder';
 
 const log = createLogger('TeachingGeneration');
 
@@ -62,6 +64,11 @@ function buildKnowledgeQueryFromTeachingRequest(request: TeachingRequest): strin
  * 
  * This is the new Stage 1: TeachingRequest → TeachingDesign (initial draft)
  * 
+ * Now supports three-source fusion:
+ * 1. Teacher intent (TeachingRequest)
+ * 2. Reference materials (PDF + images)
+ * 3. Knowledge base (FastGPT RAG)
+ * 
  * Output includes:
  * - objectives, keyPoints, difficulties
  * - slides (title + keyPoints only, no canvas yet)
@@ -69,8 +76,7 @@ function buildKnowledgeQueryFromTeachingRequest(request: TeachingRequest): strin
  */
 export async function generateTeachingDesignFromRequest(
   request: TeachingRequest,
-  pdfText: string | undefined,
-  pdfImages: ParsedImage[] | undefined,
+  materials: ReferenceMaterial[] | undefined,
   aiCall: AICallFn,
   callbacks?: GenerationCallbacks,
   options?: {
@@ -79,7 +85,43 @@ export async function generateTeachingDesignFromRequest(
     researchContext?: string;
   },
 ): Promise<GenerationResult<TeachingDesign>> {
-  // Step 1: Query FastGPT knowledge base if enabled
+  // Step 1: Parse reference materials
+  let parsedMaterials = {
+    textContent: '',
+    images: [] as ParsedImage[],
+    summaries: [] as string[],
+  };
+
+  if (materials && materials.length > 0) {
+    try {
+      log.info(`Parsing ${materials.length} reference materials...`);
+      callbacks?.onProgress?.({
+        currentStage: 1,
+        overallProgress: 2,
+        stageProgress: 5,
+        statusMessage: '正在解析参考资料...',
+        scenesGenerated: 0,
+        totalScenes: 0,
+      });
+
+      parsedMaterials = await parseTeachingMaterials(materials);
+
+      log.info(`Materials parsed: ${parsedMaterials.textContent.length} chars, ${parsedMaterials.images.length} images`);
+      callbacks?.onProgress?.({
+        currentStage: 1,
+        overallProgress: 5,
+        stageProgress: 10,
+        statusMessage: `资料解析完成（${parsedMaterials.images.length}张图片）`,
+        scenesGenerated: 0,
+        totalScenes: 0,
+      });
+    } catch (error) {
+      log.error('Failed to parse materials, continuing without them:', error);
+      // Continue without materials (graceful degradation)
+    }
+  }
+
+  // Step 2: Query FastGPT knowledge base if enabled
   let ragContext = '';
 
   if (request.useKnowledgeBase) {
@@ -88,7 +130,7 @@ export async function generateTeachingDesignFromRequest(
       callbacks?.onProgress?.({
         currentStage: 1,
         overallProgress: 5,
-        stageProgress: 10,
+        stageProgress: 15,
         statusMessage: '正在查询知识库...',
         scenesGenerated: 0,
         totalScenes: 0,
@@ -102,7 +144,7 @@ export async function generateTeachingDesignFromRequest(
       callbacks?.onProgress?.({
         currentStage: 1,
         overallProgress: 10,
-        stageProgress: 20,
+        stageProgress: 25,
         statusMessage: '知识库查询完成',
         scenesGenerated: 0,
         totalScenes: 0,
@@ -113,7 +155,7 @@ export async function generateTeachingDesignFromRequest(
       callbacks?.onProgress?.({
         currentStage: 1,
         overallProgress: 10,
-        stageProgress: 20,
+        stageProgress: 25,
         statusMessage: '知识库查询失败，继续生成...',
         scenesGenerated: 0,
         totalScenes: 0,
@@ -122,12 +164,29 @@ export async function generateTeachingDesignFromRequest(
     }
   }
 
-  // Build available images description
+  // Step 3: Build three-source context bundle
+  const contextBundle = buildTeachingContextBundle(request, parsedMaterials, ragContext);
+  
+  log.info('Three-source context bundle built:', {
+    materialChars: contextBundle.extractedFromMaterials.textContent.length,
+    imageCount: contextBundle.extractedFromMaterials.availableImages.length,
+    ragChars: contextBundle.retrievedKnowledge.relevantChunks.join('').length,
+    mergedChars: contextBundle.mergedContext.length,
+  });
+
+  // Step 4: Build available images description for prompt
+  const allImages = contextBundle.extractedFromMaterials.availableImages;
   let availableImagesText =
     request.language === 'zh-CN' ? '无可用图片' : 'No images available';
   let visionImages: Array<{ id: string; src: string }> | undefined;
 
-  if (pdfImages && pdfImages.length > 0) {
+  if (allImages.length > 0) {
+    // Convert ParsedImage to PdfImage format (ensure pageNumber is present)
+    const pdfImages = allImages.map((img) => ({
+      ...img,
+      pageNumber: img.pageNumber ?? 0, // Default to 0 if not specified
+    }));
+
     if (options?.visionEnabled && options?.imageMapping) {
       const allWithSrc = pdfImages.filter((img) => options.imageMapping![img.id]);
       const visionSlice = allWithSrc.slice(0, MAX_VISION_IMAGES);
@@ -155,9 +214,9 @@ export async function generateTeachingDesignFromRequest(
     }
   }
 
-  // Build prompt for teaching design generation
+  // Step 5: Build prompt using merged context
   const systemPrompt = `你是一位经验丰富的教学设计专家。
-你的任务是根据教师需求和参考资料，生成结构化的教学设计。
+你的任务是根据教师需求、参考资料和知识库内容，生成结构化的教学设计。
 
 输出格式必须是 JSON，包含以下字段：
 {
@@ -198,37 +257,18 @@ export async function generateTeachingDesignFromRequest(
 1. slides 数组中只需要提供标题和要点，不需要具体的元素布局
 2. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
 3. 根据课时合理安排内容量
-4. 如果有可用图片，在 keyPoints 中标注使用哪些图片（如"使用 img_1 展示..."）`;
+4. 如果有可用图片，在 keyPoints 中标注使用哪些图片（如"使用 img_1 展示..."）
+5. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性`;
 
-  // Prepare RAG context section (truncate to avoid token overflow)
-  const safeRagContext = ragContext ? ragContext.slice(0, 2000) : '';
-  const ragSection = safeRagContext
-    ? `\n## 【知识库参考内容】\n${safeRagContext}\n`
-    : '';
-
-  const userPrompt = `# 教学设计任务
-
-## 基本信息
-- 学科：${request.subject}
-- 课题：${request.topic}
-- 年级：${request.gradeLevel}
-- 课时：${request.duration} 分钟
-
-## 教学目标
-${request.objectives ? formatObjectives(request.objectives) : '（请根据课题自动生成三维目标）'}
-${ragSection}
-## 参考资料内容
-${pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : '无'}
+  // Use merged context from three-source bundle
+  const userPrompt = `${contextBundle.mergedContext}
 
 ## 可用图片资源
 ${availableImagesText}
 
-## 特殊要求
-${request.additionalNotes || '无'}
-
 ---
 
-请基于以上信息，生成完整的教学设计JSON。`;
+请基于以上三源融合信息，生成完整的教学设计JSON。`;
 
   try {
     callbacks?.onProgress?.({
@@ -302,6 +342,11 @@ ${request.additionalNotes || '无'}
     });
 
     log.info(`Generated teaching design: ${design.slides.length} slides, ${design.procedures.length} procedures`);
+    log.info('Three-source fusion applied:', {
+      hasMaterials: parsedMaterials.textContent.length > 0,
+      hasImages: parsedMaterials.images.length > 0,
+      hasRAG: ragContext.length > 0,
+    });
 
     return { success: true, data: design };
   } catch (error) {

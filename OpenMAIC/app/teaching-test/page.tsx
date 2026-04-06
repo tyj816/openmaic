@@ -9,8 +9,12 @@
 import { useState } from 'react';
 import { useTeachingGenerator } from '@/lib/hooks/use-teaching-generator';
 import { useExportTeachingPPTX } from '@/lib/export/use-export-teaching-pptx';
-import type { TeachingRequest } from '@/lib/types/teaching';
+import type { TeachingRequest, ReferenceMaterial, ParsedImage } from '@/lib/types/teaching';
 import { getModel } from '@/lib/ai/providers';
+import { nanoid } from 'nanoid';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('TeachingTest');
 
 // 预设测试场景
 const TEST_SCENARIOS = [
@@ -95,9 +99,76 @@ const TEST_SCENARIOS = [
 
 export default function TeachingTestPage() {
   const [request, setRequest] = useState<TeachingRequest>(TEST_SCENARIOS[0].request);
+  const [materials, setMaterials] = useState<ReferenceMaterial[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   const generator = useTeachingGenerator();
   const exporter = useExportTeachingPPTX();
+
+  // Handle file upload
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const fileType = getFileType(file);
+        
+        if (fileType === 'pdf') {
+          // Parse PDF using API
+          const parsedPdf = await parsePdfFile(file);
+          if (parsedPdf) {
+            const material: ReferenceMaterial = {
+              id: nanoid(),
+              type: 'pdf',
+              name: file.name,
+              parsedText: parsedPdf.text,
+              parsedImages: parsedPdf.images,
+              metadata: {
+                uploadedAt: new Date(),
+                size: file.size,
+                pageCount: parsedPdf.pageCount,
+              },
+            };
+            setMaterials(prev => [...prev, material]);
+            log.info(`PDF parsed: ${file.name}, ${parsedPdf.images.length} images`);
+          }
+        } else if (fileType === 'image') {
+          // Handle image upload
+          const imageData = await readFileAsDataURL(file);
+          const material: ReferenceMaterial = {
+            id: nanoid(),
+            type: 'image',
+            name: file.name,
+            parsedImages: [{
+              id: nanoid(),
+              src: imageData,
+              description: `上传的图片：${file.name}`,
+            }],
+            metadata: {
+              uploadedAt: new Date(),
+              size: file.size,
+            },
+          };
+          setMaterials(prev => [...prev, material]);
+          log.info(`Image uploaded: ${file.name}`);
+        }
+      }
+    } catch (error) {
+      log.error('File upload failed:', error);
+      alert(`文件上传失败：${error}`);
+    } finally {
+      setUploading(false);
+      // Reset input
+      event.target.value = '';
+    }
+  };
+
+  // Remove material
+  const handleRemoveMaterial = (id: string) => {
+    setMaterials(prev => prev.filter(m => m.id !== id));
+  };
 
   const handleGenerate = async () => {
     // 使用 GLM-5 模型
@@ -112,8 +183,18 @@ export default function TeachingTestPage() {
 
     const { model } = getModel(modelConfig);
 
+    // Build image mapping from materials
+    const imageMapping: Record<string, string> = {};
+    materials.forEach(material => {
+      material.parsedImages?.forEach(img => {
+        imageMapping[img.id] = img.src;
+      });
+    });
+
     const design = await generator.generate(request, {
       model,
+      materials,
+      imageMapping,
       modelString: 'glm:glm-4.7', // 修正格式：使用冒号而不是斜杠
       apiKey: modelConfig.apiKey,
       baseUrl: modelConfig.baseUrl,
@@ -154,6 +235,67 @@ export default function TeachingTestPage() {
         <p className="text-xs text-gray-600 mt-2">
           💡 点击上方按钮快速加载预设场景，所有场景默认启用知识库增强
         </p>
+      </div>
+
+      {/* 参考资料上传 */}
+      <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded">
+        <h2 className="text-lg font-semibold mb-3">📎 参考资料上传（三源融合）</h2>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              上传 PDF 或图片（支持 PDF、PNG、JPG、JPEG、WEBP）
+            </label>
+            <input
+              type="file"
+              accept=".pdf,image/png,image/jpeg,image/jpg,image/webp"
+              multiple
+              onChange={handleFileUpload}
+              disabled={uploading}
+              className="block w-full text-sm text-gray-500
+                file:mr-4 file:py-2 file:px-4
+                file:rounded file:border-0
+                file:text-sm file:font-semibold
+                file:bg-green-600 file:text-white
+                hover:file:bg-green-700
+                disabled:opacity-50"
+            />
+          </div>
+
+          {/* 已上传资料列表 */}
+          {materials.length > 0 && (
+            <div className="mt-3">
+              <p className="text-sm font-medium mb-2">已上传资料（{materials.length}）：</p>
+              <ul className="space-y-2">
+                {materials.map((material) => (
+                  <li key={material.id} className="flex items-center justify-between bg-white p-2 rounded border">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg">
+                        {material.type === 'pdf' ? '📄' : '🖼️'}
+                      </span>
+                      <div className="text-sm">
+                        <div className="font-medium">{material.name}</div>
+                        <div className="text-gray-500 text-xs">
+                          {material.type === 'pdf' && `${material.metadata.pageCount || 0}页，`}
+                          {material.parsedImages?.length || 0}张图片
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleRemoveMaterial(material.id)}
+                      className="text-red-600 hover:text-red-800 text-sm"
+                    >
+                      删除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {uploading && (
+            <div className="text-sm text-gray-600">正在上传和解析文件...</div>
+          )}
+        </div>
       </div>
 
       <div className="space-y-4 mb-8">
@@ -360,4 +502,59 @@ export default function TeachingTestPage() {
       )}
     </div>
   );
+}
+
+// Helper functions
+
+function getFileType(file: File): 'pdf' | 'image' | 'other' {
+  if (file.type === 'application/pdf') return 'pdf';
+  if (file.type.startsWith('image/')) return 'image';
+  return 'other';
+}
+
+async function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function parsePdfFile(file: File): Promise<{
+  text: string;
+  images: ParsedImage[];
+  pageCount: number;
+} | null> {
+  try {
+    const formData = new FormData();
+    formData.append('pdf', file);
+    formData.append('providerId', 'unpdf');
+
+    const response = await fetch('/api/parse-pdf', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`PDF parsing failed: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    if (!result.success || !result.data) {
+      throw new Error('PDF parsing returned no data');
+    }
+
+    const pdfData = result.data;
+    const images: ParsedImage[] = pdfData.metadata?.pdfImages || [];
+
+    return {
+      text: pdfData.text || '',
+      images,
+      pageCount: pdfData.metadata?.pageCount || 0,
+    };
+  } catch (error) {
+    log.error('Failed to parse PDF:', error);
+    return null;
+  }
 }
