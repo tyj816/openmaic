@@ -7,7 +7,7 @@
 
 import { nanoid } from 'nanoid';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
-import type { TeachingRequest, TeachingDesign, ParsedImage, ReferenceMaterial } from '@/lib/types/teaching';
+import type { TeachingRequest, TeachingDesign, ParsedImage, ReferenceMaterial, SourceUsageStats, KeyPointWithSource } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
@@ -20,7 +20,40 @@ import { buildTeachingContextBundle } from './teaching-context-builder';
 const log = createLogger('TeachingGeneration');
 
 /**
- * Build knowledge base query from teaching request
+ * Calculate source usage statistics from teaching design
+ */
+function calculateSourceUsageStats(design: TeachingDesign): SourceUsageStats {
+  let materialUsage = 0;
+  let ragUsage = 0;
+  let teacherUsage = 0;
+  let totalItems = 0;
+
+  // Count from all slides' keyPoints
+  design.slides.forEach(slide => {
+    slide.keyPoints.forEach(kp => {
+      totalItems++;
+      const keyPoint = kp as KeyPointWithSource;
+      if (keyPoint.source === 'material') {
+        materialUsage++;
+      } else if (keyPoint.source === 'knowledge') {
+        ragUsage++;
+      } else if (keyPoint.source === 'teacher') {
+        teacherUsage++;
+      }
+    });
+  });
+
+  return {
+    materialUsage,
+    ragUsage,
+    teacherUsage,
+    totalItems,
+  };
+}
+
+/**
+ * Build enhanced knowledge base query from teaching request
+ * Enhanced version: includes topic + key points + teaching objectives
  */
 function buildKnowledgeQueryFromTeachingRequest(request: TeachingRequest): string {
   const parts = [
@@ -32,11 +65,20 @@ function buildKnowledgeQueryFromTeachingRequest(request: TeachingRequest): strin
     `课时：${request.duration}分钟`,
   ];
 
+  // Enhanced: Add specific knowledge points from objectives
   if (request.objectives) {
     parts.push('');
-    parts.push('教学目标：');
+    parts.push('教学目标与关键知识点：');
     if (request.objectives.knowledge && request.objectives.knowledge.length > 0) {
       parts.push(`知识目标：${request.objectives.knowledge.join('；')}`);
+      // Extract key terms for better RAG matching
+      const keyTerms = request.objectives.knowledge
+        .flatMap(k => k.match(/[\u4e00-\u9fa5]{2,}/g) || [])
+        .filter((term, index, self) => self.indexOf(term) === index)
+        .slice(0, 5);
+      if (keyTerms.length > 0) {
+        parts.push(`核心概念：${keyTerms.join('、')}`);
+      }
     }
     if (request.objectives.skills && request.objectives.skills.length > 0) {
       parts.push(`能力目标：${request.objectives.skills.join('；')}`);
@@ -49,12 +91,14 @@ function buildKnowledgeQueryFromTeachingRequest(request: TeachingRequest): strin
   }
 
   parts.push('');
-  parts.push('请输出：');
-  parts.push('1. 本课题核心知识点');
-  parts.push('2. 易错点/重难点');
-  parts.push('3. 推荐教学思路');
-  parts.push('4. 可用于课堂讲解的关键内容');
-  parts.push('5. 如适合，请给出简洁的例子或结构化要点');
+  parts.push('请重点输出：');
+  parts.push('1. 本课题的核心知识点（定义、原理、公式等）');
+  parts.push('2. 易错点/重难点及其解决方法');
+  parts.push('3. 推荐的教学思路和教学方法');
+  parts.push('4. 可用于课堂讲解的关键内容和例子');
+  parts.push('5. 相关的概念辨析和知识拓展');
+  parts.push('');
+  parts.push('注意：请提供具体、可操作的教学内容，而非泛泛而谈的建议。');
 
   return parts.join('\n');
 }
@@ -214,7 +258,7 @@ export async function generateTeachingDesignFromRequest(
     }
   }
 
-  // Step 5: Build prompt using merged context
+  // Step 5: Build prompt using merged context with enhanced source tracking
   const systemPrompt = `你是一位经验丰富的教学设计专家。
 你的任务是根据教师需求、参考资料和知识库内容，生成结构化的教学设计。
 
@@ -236,7 +280,12 @@ export async function generateTeachingDesignFromRequest(
       "title": "页面标题",
       "description": "这一页的教学目的（1-2句）",
       "type": "cover" | "content" | "transition" | "end",
-      "keyPoints": ["本页要点1", "本页要点2"],
+      "keyPoints": [
+        {
+          "content": "本页要点内容",
+          "source": "teacher" | "material" | "knowledge"
+        }
+      ],
       "narration": "教师讲解词（可选）"
     }
   ],
@@ -253,12 +302,24 @@ export async function generateTeachingDesignFromRequest(
   "boardDesign": "板书设计（文本描述）"
 }
 
-注意：
-1. slides 数组中只需要提供标题和要点，不需要具体的元素布局
-2. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
-3. 根据课时合理安排内容量
-4. 如果有可用图片，在 keyPoints 中标注使用哪些图片（如"使用 img_1 展示..."）
-5. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性`;
+重要说明：
+1. keyPoints 必须使用对象格式，包含 content 和 source 字段
+2. source 字段标记内容来源：
+   - "teacher": 直接来自教师需求和教学目标
+   - "material": 来自参考资料的内容、术语、概念
+   - "knowledge": 来自知识库的专业知识和教学建议
+3. 如果内容融合多个来源，选择主要来源标记
+4. slides 数组中只需要提供标题和要点，不需要具体的元素布局
+5. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
+6. 根据课时合理安排内容量
+7. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
+8. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
+
+三源融合要求：
+- 至少 30% 的 keyPoints 来自参考资料（source: "material"）
+- 至少 30% 的 keyPoints 来自知识库（source: "knowledge"）
+- 必须明确使用参考资料中的关键术语和知识库中的专业概念
+- 不允许所有内容都标记为同一来源`;
 
   // Use merged context from three-source bundle
   const userPrompt = `${contextBundle.mergedContext}
@@ -268,7 +329,8 @@ ${availableImagesText}
 
 ---
 
-请基于以上三源融合信息，生成完整的教学设计JSON。`;
+请基于以上三源融合信息，生成完整的教学设计JSON。
+特别注意：每个 keyPoint 必须包含 content 和 source 字段，确保三源内容分布均衡。`;
 
   try {
     callbacks?.onProgress?.({
@@ -339,6 +401,18 @@ ${availableImagesText}
       statusMessage: `已生成教学设计，包含 ${design.slides.length} 页课件`,
       scenesGenerated: 0,
       totalScenes: design.slides.length,
+    });
+
+    // Calculate and log source usage statistics
+    const sourceStats = calculateSourceUsageStats(design);
+    log.info('Three-source fusion statistics:', {
+      materialUsage: sourceStats.materialUsage,
+      ragUsage: sourceStats.ragUsage,
+      teacherUsage: sourceStats.teacherUsage,
+      totalItems: sourceStats.totalItems,
+      materialPercentage: ((sourceStats.materialUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
+      ragPercentage: ((sourceStats.ragUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
+      teacherPercentage: ((sourceStats.teacherUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
     });
 
     log.info(`Generated teaching design: ${design.slides.length} slides, ${design.procedures.length} procedures`);

@@ -144,18 +144,39 @@ function buildMergedContext(
     }
   }
 
-  // Section 5: Generation Requirements
-  sections.push('\n\n# 【生成要求】');
+  // Section 5: Enhanced Generation Requirements (Three-Source Fusion Constraints)
+  sections.push('\n\n# 【生成要求 - 三源融合强约束】');
   sections.push('请综合以上三方面信息：');
   sections.push('1. 教师的明确需求和教学目标');
   sections.push('2. 参考资料中的具体内容和图片资源');
   sections.push('3. 知识库中的专业知识和教学建议');
+  sections.push('');
+  sections.push('## 核心约束（必须满足）：');
+  sections.push('1. **至少 30% 内容来自【参考资料】** - 必须明确使用参考资料中的关键术语、概念、图表');
+  sections.push('2. **至少 30% 内容来自【知识库】** - 必须明确使用知识库中的专业概念、教学建议');
+  sections.push('3. **不允许只使用单一来源** - 每个知识点应融合多个来源');
+  sections.push('');
+  sections.push('## 内容来源标记要求：');
+  sections.push('在生成的 keyPoints 中，每个要点必须标注来源：');
+  sections.push('- 使用 "source" 字段标记：\'teacher\' | \'material\' | \'knowledge\'');
+  sections.push('- 如果内容融合多个来源，选择主要来源');
+  sections.push('- 示例格式：');
+  sections.push('  {');
+  sections.push('    "content": "进程是资源分配的基本单位",');
+  sections.push('    "source": "material"');
+  sections.push('  }');
+  sections.push('');
+  sections.push('## 引用要求：');
+  sections.push('- 从参考资料引用时，保留原文的关键术语和表述方式');
+  sections.push('- 从知识库引用时，使用专业的学术表达');
+  sections.push('- 从教师需求引用时，体现教学目标的针对性');
   sections.push('');
   sections.push('生成结构化的教学设计，确保：');
   sections.push('- 教学内容准确、完整');
   sections.push('- 充分利用参考资料中的素材');
   sections.push('- 融入知识库的专业指导');
   sections.push('- 符合教师的特殊要求');
+  sections.push('- 三源内容分布均衡，可追溯来源');
 
   return sections.join('\n');
 }

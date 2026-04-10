@@ -131,8 +131,8 @@ export interface TeachingSlide {
   description?: string; // Teaching purpose for this slide (1-2 sentences)
   type?: 'cover' | 'contents' | 'transition' | 'content' | 'end';
 
-  // Teaching content
-  keyPoints: string[];
+  // Teaching content with source tracking
+  keyPoints: KeyPointWithSource[];
   contentBlocks: ContentBlock[];
 
   // Speaker notes (narration)
@@ -143,6 +143,15 @@ export interface TeachingSlide {
 
   // Related teaching procedure
   relatedProcedureId?: string;
+}
+
+/**
+ * Key point with source tracking for enhanced three-source fusion
+ */
+export interface KeyPointWithSource {
+  content: string;
+  source?: 'teacher' | 'material' | 'knowledge';
+  sourceDetail?: string; // Optional: specific reference or page number
 }
 
 /**
@@ -273,6 +282,16 @@ export interface RegenerationRequest {
 }
 
 // ==================== Three-Source Fusion (FastGPT Integration) ====================
+
+/**
+ * Source usage statistics for enhanced three-source fusion
+ */
+export interface SourceUsageStats {
+  materialUsage: number; // Number of content items from materials
+  ragUsage: number; // Number of content items from knowledge base
+  teacherUsage: number; // Number of content items from teacher input
+  totalItems: number; // Total content items generated
+}
 
 /**
  * Extracted materials context
