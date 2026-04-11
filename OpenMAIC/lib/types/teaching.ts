@@ -152,6 +152,7 @@ export interface KeyPointWithSource {
   content: string;
   source?: 'teacher' | 'material' | 'knowledge';
   sourceDetail?: string; // Optional: specific reference or page number
+  ragChunkId?: string; // RAG chunk ID for knowledge source verification
 }
 
 /**
@@ -304,12 +305,23 @@ export interface ExtractedMaterials {
 }
 
 /**
+ * RAG chunk with source tracking for verification
+ */
+export interface RagChunk {
+  id: string;
+  content: string;
+  sourceName?: string;
+  chunkIndex?: number;
+}
+
+/**
  * Retrieved knowledge from FastGPT
  */
 export interface RetrievedKnowledge {
   relevantChunks: string[];
   references: string[];
   confidence?: number;
+  ragChunks?: RagChunk[]; // Structured chunks with IDs for verification
 }
 
 /**

@@ -7,7 +7,7 @@
  * 3. RAG context (from FastGPT knowledge base)
  */
 
-import type { TeachingRequest, TeachingContextBundle } from '@/lib/types/teaching';
+import type { TeachingRequest, TeachingContextBundle, RagChunk } from '@/lib/types/teaching';
 import type { ParsedMaterialsResult } from './teaching-material-parser';
 import { createLogger } from '@/lib/logger';
 
@@ -23,12 +23,14 @@ const MAX_RAG_CONTEXT_CHARS = 2000;
  * @param request - Teacher's teaching request
  * @param parsedMaterials - Parsed reference materials
  * @param ragContext - Retrieved knowledge from FastGPT
+ * @param ragChunks - Structured RAG chunks with IDs for verification
  * @returns Complete teaching context bundle
  */
 export function buildTeachingContextBundle(
   request: TeachingRequest,
   parsedMaterials: ParsedMaterialsResult,
-  ragContext: string
+  ragContext: string,
+  ragChunks?: RagChunk[]
 ): TeachingContextBundle {
   log.info('Building teaching context bundle from three sources');
 
@@ -50,7 +52,7 @@ export function buildTeachingContextBundle(
   const materialContext = parsedMaterials.textContent.slice(0, MAX_MATERIAL_CONTEXT_CHARS);
   const materialTruncated = parsedMaterials.textContent.length > MAX_MATERIAL_CONTEXT_CHARS;
 
-  // 3. RAG Context (with length control)
+  // 3. RAG Context (with length control and chunk formatting)
   const safeRagContext = ragContext.slice(0, MAX_RAG_CONTEXT_CHARS);
   const ragTruncated = ragContext.length > MAX_RAG_CONTEXT_CHARS;
 
@@ -60,6 +62,7 @@ export function buildTeachingContextBundle(
     materialContext,
     parsedMaterials.images.length,
     safeRagContext,
+    ragChunks,
     {
       materialTruncated,
       ragTruncated,
@@ -80,6 +83,7 @@ export function buildTeachingContextBundle(
       relevantChunks: safeRagContext ? [safeRagContext] : [],
       references: [],
       confidence: undefined,
+      ragChunks,
     },
     mergedContext,
   };
@@ -93,6 +97,7 @@ function buildMergedContext(
   materialContext: string,
   imageCount: number,
   ragContext: string,
+  ragChunks: RagChunk[] | undefined,
   flags: { materialTruncated: boolean; ragTruncated: boolean }
 ): string {
   const sections: string[] = [];
@@ -135,12 +140,29 @@ function buildMergedContext(
     sections.push('（图片ID将在后续生成中提供）');
   }
 
-  // Section 4: Knowledge Base Content
+  // Section 4: Knowledge Base Content (with chunk IDs for verification)
   if (ragContext) {
     sections.push('\n\n# 【知识库参考内容】');
-    sections.push(ragContext);
+    
+    // If we have structured chunks, format them with IDs
+    if (ragChunks && ragChunks.length > 0) {
+      sections.push('以下是从知识库检索到的相关内容片段，每个片段都有唯一ID用于来源追溯：\n');
+      ragChunks.forEach((chunk, index) => {
+        const chunkNumber = index + 1;
+        sections.push(`【知识库片段${chunkNumber}】（ID: ${chunk.id}）`);
+        if (chunk.sourceName) {
+          sections.push(`来源文件：${chunk.sourceName}`);
+        }
+        sections.push(chunk.content);
+        sections.push(''); // Empty line between chunks
+      });
+    } else {
+      // Fallback: use raw context without chunk structure
+      sections.push(ragContext);
+    }
+    
     if (flags.ragTruncated) {
-      sections.push('\n（内容较长，已截取前2000字）');
+      sections.push('（内容较长，已截取前2000字）');
     }
   }
 
@@ -159,24 +181,32 @@ function buildMergedContext(
   sections.push('## 内容来源标记要求：');
   sections.push('在生成的 keyPoints 中，每个要点必须标注来源：');
   sections.push('- 使用 "source" 字段标记：\'teacher\' | \'material\' | \'knowledge\'');
+  sections.push('- **当使用知识库内容时，必须在 ragChunkId 字段中标注具体的片段ID**');
   sections.push('- 如果内容融合多个来源，选择主要来源');
   sections.push('- 示例格式：');
   sections.push('  {');
-  sections.push('    "content": "进程是资源分配的基本单位",');
-  sections.push('    "source": "material"');
+  sections.push('    "content": "进程是资源分配的基本单位（来自知识库片段1）",');
+  sections.push('    "source": "knowledge",');
+  sections.push('    "ragChunkId": "69d32ee3e29ef33b19ad8cb0"');
   sections.push('  }');
+  sections.push('');
+  sections.push('## 知识库引用强约束：');
+  sections.push('- **当 source 为 "knowledge" 时，必须在内容中明确标注来源片段编号**');
+  sections.push('- 例如："进程的三态模型包括就绪、运行、阻塞（来自知识库片段2）"');
+  sections.push('- **必须填写 ragChunkId 字段，值为对应片段的ID**');
+  sections.push('- **不允许编造知识库内容，所有标记为 knowledge 的内容必须能在上述片段中找到**');
   sections.push('');
   sections.push('## 引用要求：');
   sections.push('- 从参考资料引用时，保留原文的关键术语和表述方式');
-  sections.push('- 从知识库引用时，使用专业的学术表达');
+  sections.push('- 从知识库引用时，使用专业的学术表达，并标注片段来源');
   sections.push('- 从教师需求引用时，体现教学目标的针对性');
   sections.push('');
   sections.push('生成结构化的教学设计，确保：');
   sections.push('- 教学内容准确、完整');
   sections.push('- 充分利用参考资料中的素材');
-  sections.push('- 融入知识库的专业指导');
+  sections.push('- 融入知识库的专业指导，并可追溯到具体片段');
   sections.push('- 符合教师的特殊要求');
-  sections.push('- 三源内容分布均衡，可追溯来源');
+  sections.push('- 三源内容分布均衡，来源可验证、可证明');
 
   return sections.join('\n');
 }

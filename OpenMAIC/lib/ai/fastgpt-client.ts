@@ -18,9 +18,21 @@ export interface FastGPTQueryOptions {
   timeoutMs?: number;
 }
 
+export interface FastGPTQuoteItem {
+  id: string;
+  chunkIndex?: number;
+  datasetId?: string;
+  collectionId?: string;
+  sourceId?: string;
+  sourceName?: string;
+  q?: string; // Quote content
+  a?: string; // Answer content
+}
+
 export interface FastGPTQueryResult {
   answer: string;
   raw?: unknown;
+  quoteList?: FastGPTQuoteItem[]; // Extracted quote list for source verification
 }
 
 /**
@@ -98,6 +110,27 @@ export async function queryFastGPT(
     // 🔍 调试：打印完整响应结构
     log.info('FastGPT raw response:', JSON.stringify(data, null, 2));
 
+    // Extract quoteList from responseData if available
+    let quoteList: FastGPTQuoteItem[] | undefined;
+    if (data.responseData && Array.isArray(data.responseData)) {
+      const datasetSearchNode = data.responseData.find(
+        (node: any) => node.moduleType === 'datasetSearchNode'
+      );
+      if (datasetSearchNode?.quoteList && Array.isArray(datasetSearchNode.quoteList)) {
+        quoteList = datasetSearchNode.quoteList.map((quote: any) => ({
+          id: quote.id,
+          chunkIndex: quote.chunkIndex,
+          datasetId: quote.datasetId,
+          collectionId: quote.collectionId,
+          sourceId: quote.sourceId,
+          sourceName: quote.sourceName,
+          q: quote.q,
+          a: quote.a,
+        }));
+        log.info(`Extracted ${quoteList.length} quote chunks from FastGPT response`);
+      }
+    }
+
     // FastGPT 可能返回两种格式：
     // 1. OpenAI 格式: { choices: [{ message: { content: "..." } }] }
     // 2. 直接 JSON 格式: { title: "...", sections: [...] }
@@ -128,6 +161,7 @@ export async function queryFastGPT(
     return {
       answer,
       raw: data,
+      quoteList,
     };
   } catch (error) {
     if (error instanceof Error) {

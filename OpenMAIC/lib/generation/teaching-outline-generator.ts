@@ -7,7 +7,7 @@
 
 import { nanoid } from 'nanoid';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
-import type { TeachingRequest, TeachingDesign, ParsedImage, ReferenceMaterial, SourceUsageStats, KeyPointWithSource } from '@/lib/types/teaching';
+import type { TeachingRequest, TeachingDesign, ParsedImage, ReferenceMaterial, SourceUsageStats, KeyPointWithSource, RagChunk } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
@@ -136,6 +136,7 @@ export async function generateTeachingDesignFromRequest(
 
   // Step 2: Query FastGPT knowledge base if enabled
   let ragContext = '';
+  let ragChunks: RagChunk[] | undefined;
 
   if (request.useKnowledgeBase) {
     try {
@@ -152,6 +153,17 @@ export async function generateTeachingDesignFromRequest(
       const query = buildKnowledgeQueryFromTeachingRequest(request);
       const result = await queryFastGPT(query, { timeoutMs: 300000 }); // 5分钟
       ragContext = result.answer;
+
+      // Extract and structure RAG chunks from quoteList
+      if (result.quoteList && result.quoteList.length > 0) {
+        ragChunks = result.quoteList.map((quote) => ({
+          id: quote.id,
+          content: quote.q || quote.a || '',
+          sourceName: quote.sourceName,
+          chunkIndex: quote.chunkIndex,
+        }));
+        log.info(`Extracted ${ragChunks.length} RAG chunks for verification`);
+      }
 
       log.info(`FastGPT query successful, retrieved ${ragContext.length} chars`);
       callbacks?.onProgress?.({
@@ -174,11 +186,12 @@ export async function generateTeachingDesignFromRequest(
         totalScenes: 0,
       });
       ragContext = '';
+      ragChunks = undefined;
     }
   }
 
   // Step 3: Build three-source context bundle
-  const contextBundle = buildTeachingContextBundle(request, parsedMaterials, ragContext);
+  const contextBundle = buildTeachingContextBundle(request, parsedMaterials, ragContext, ragChunks);
   
   log.info('Three-source context bundle built:', {
     materialChars: contextBundle.extractedFromMaterials.textContent.length,
@@ -277,18 +290,20 @@ export async function generateTeachingDesignFromRequest(
    - "teacher": 直接来自教师需求和教学目标
    - "material": 来自参考资料的内容、术语、概念
    - "knowledge": 来自知识库的专业知识和教学建议
-3. 如果内容融合多个来源，选择主要来源标记
-4. slides 数组中只需要提供标题和要点，不需要具体的元素布局
-5. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
-6. 根据课时合理安排内容量
-7. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
-8. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
+3. **当 source 为 "knowledge" 时，必须填写 ragChunkId 字段，值为知识库片段的ID**
+4. 如果内容融合多个来源，选择主要来源标记
+5. slides 数组中只需要提供标题和要点，不需要具体的元素布局
+6. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
+7. 根据课时合理安排内容量
+8. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
+9. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
 
 三源融合要求：
 - 至少 30% 的 keyPoints 来自参考资料（source: "material"）
 - 至少 30% 的 keyPoints 来自知识库（source: "knowledge"）
 - 必须明确使用参考资料中的关键术语和知识库中的专业概念
-- 不允许所有内容都标记为同一来源`;
+- 不允许所有内容都标记为同一来源
+- **标记为 knowledge 的内容必须能在知识库片段中找到，并正确填写 ragChunkId**`;
 
   // Use merged context from three-source bundle
   const userPrompt = `${contextBundle.mergedContext}
@@ -299,7 +314,11 @@ ${availableImagesText}
 ---
 
 请基于以上三源融合信息，生成完整的教学设计JSON。
-特别注意：每个 keyPoint 必须包含 content 和 source 字段，确保三源内容分布均衡。`;
+特别注意：
+1. 每个 keyPoint 必须包含 content 和 source 字段
+2. 当 source 为 "knowledge" 时，必须在内容中标注"（来自知识库片段X）"，并填写 ragChunkId 字段
+3. ragChunkId 必须是上文提供的知识库片段的真实ID
+4. 确保三源内容分布均衡，来源可验证`;
 
   // Step 7: Generate with validation and retry mechanism
   const MAX_RETRIES = 2;
@@ -399,7 +418,7 @@ ${availableImagesText}
       };
 
       // Validate the generated design
-      validationResult = validateTeachingDesign(design);
+      validationResult = validateTeachingDesign(design, ragChunks);
 
       log.info(`Attempt ${currentAttempt} validation result:`, {
         isValid: validationResult.isValid,
