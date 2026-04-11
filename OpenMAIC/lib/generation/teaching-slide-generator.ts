@@ -84,11 +84,16 @@ export async function generateSlideFromTeachingSlide(
   const canvasWidth = 1000;
   const canvasHeight = 562.5;
 
+  // Extract content from KeyPointWithSource objects (support both old string[] and new object[] format)
+  const keyPointsContent = teachingSlide.keyPoints.map((kp) => 
+    typeof kp === 'string' ? kp : kp.content
+  );
+  
   // Use the original high-quality slide content prompt system
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
     title: teachingSlide.title,
-    description: teachingSlide.description || teachingSlide.keyPoints.join('; '),
-    keyPoints: teachingSlide.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
+    description: teachingSlide.description || keyPointsContent.join('; '),
+    keyPoints: keyPointsContent.map((p, i) => `${i + 1}. ${p}`).join('\n'),
     assignedImages: assignedImagesText,
     canvas_width: canvasWidth,
     canvas_height: canvasHeight,

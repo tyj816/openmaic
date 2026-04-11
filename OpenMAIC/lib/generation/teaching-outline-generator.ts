@@ -16,40 +16,9 @@ import { createLogger } from '@/lib/logger';
 import { queryFastGPT } from '@/lib/ai/fastgpt-client';
 import { parseTeachingMaterials } from './teaching-material-parser';
 import { buildTeachingContextBundle } from './teaching-context-builder';
+import { validateTeachingDesign, buildRetryPrompt } from './fusion-validator';
 
 const log = createLogger('TeachingGeneration');
-
-/**
- * Calculate source usage statistics from teaching design
- */
-function calculateSourceUsageStats(design: TeachingDesign): SourceUsageStats {
-  let materialUsage = 0;
-  let ragUsage = 0;
-  let teacherUsage = 0;
-  let totalItems = 0;
-
-  // Count from all slides' keyPoints
-  design.slides.forEach(slide => {
-    slide.keyPoints.forEach(kp => {
-      totalItems++;
-      const keyPoint = kp as KeyPointWithSource;
-      if (keyPoint.source === 'material') {
-        materialUsage++;
-      } else if (keyPoint.source === 'knowledge') {
-        ragUsage++;
-      } else if (keyPoint.source === 'teacher') {
-        teacherUsage++;
-      }
-    });
-  });
-
-  return {
-    materialUsage,
-    ragUsage,
-    teacherUsage,
-    totalItems,
-  };
-}
 
 /**
  * Build enhanced knowledge base query from teaching request
@@ -218,7 +187,7 @@ export async function generateTeachingDesignFromRequest(
     mergedChars: contextBundle.mergedContext.length,
   });
 
-  // Step 4: Build available images description for prompt
+  // Step 5: Build available images description for prompt
   const allImages = contextBundle.extractedFromMaterials.availableImages;
   let availableImagesText =
     request.language === 'zh-CN' ? '无可用图片' : 'No images available';
@@ -258,7 +227,7 @@ export async function generateTeachingDesignFromRequest(
     }
   }
 
-  // Step 5: Build prompt using merged context with enhanced source tracking
+  // Step 6: Build prompt using merged context with enhanced source tracking
   const systemPrompt = `你是一位经验丰富的教学设计专家。
 你的任务是根据教师需求、参考资料和知识库内容，生成结构化的教学设计。
 
@@ -332,28 +301,51 @@ ${availableImagesText}
 请基于以上三源融合信息，生成完整的教学设计JSON。
 特别注意：每个 keyPoint 必须包含 content 和 source 字段，确保三源内容分布均衡。`;
 
+  // Step 7: Generate with validation and retry mechanism
+  const MAX_RETRIES = 2;
+  let currentAttempt = 0;
+  let validationResult: { isValid: boolean; issues: string[]; stats: SourceUsageStats } | null = null;
+  let design: TeachingDesign | null = null;
+
   try {
-    callbacks?.onProgress?.({
-      currentStage: 1,
-      overallProgress: 20,
-      stageProgress: 50,
-      statusMessage: '正在生成教学设计...',
-      scenesGenerated: 0,
-      totalScenes: 0,
-    });
+    while (currentAttempt <= MAX_RETRIES) {
+      currentAttempt++;
+      
+      const attemptMessage = currentAttempt === 1 
+        ? '正在生成教学设计...' 
+        : `正在重新生成教学设计（第 ${currentAttempt} 次尝试）...`;
 
-    const response = await aiCall(systemPrompt, userPrompt, visionImages);
-    const designData = parseJsonResponse<Partial<TeachingDesign>>(response);
+      callbacks?.onProgress?.({
+        currentStage: 1,
+        overallProgress: 20 + (currentAttempt - 1) * 10,
+        stageProgress: 50,
+        statusMessage: attemptMessage,
+        scenesGenerated: 0,
+        totalScenes: 0,
+      });
 
-    if (!designData || !designData.slides || !Array.isArray(designData.slides)) {
-      return {
-        success: false,
-        error: 'Failed to parse teaching design response',
-      };
-    }
+      log.info(`Generation attempt ${currentAttempt}/${MAX_RETRIES + 1}`);
 
-    // Enrich with IDs and metadata
-    const design: TeachingDesign = {
+      // Build prompt (add retry instructions if not first attempt)
+      let finalUserPrompt = userPrompt;
+      if (currentAttempt > 1 && validationResult && !validationResult.isValid) {
+        const retryInstructions = buildRetryPrompt(validationResult.issues, currentAttempt - 1);
+        finalUserPrompt = `${userPrompt}\n\n${retryInstructions}`;
+        log.info('Added retry instructions to prompt');
+      }
+
+      const response = await aiCall(systemPrompt, finalUserPrompt, visionImages);
+      const designData = parseJsonResponse<Partial<TeachingDesign>>(response);
+
+      if (!designData || !designData.slides || !Array.isArray(designData.slides)) {
+        return {
+          success: false,
+          error: 'Failed to parse teaching design response',
+        };
+      }
+
+      // Enrich with IDs and metadata
+      design = {
       id: nanoid(),
       title: designData.title || request.topic,
       subject: designData.subject || request.subject,
@@ -372,7 +364,19 @@ ${availableImagesText}
         title: slide.title || `页面 ${index + 1}`,
         description: slide.description,
         type: slide.type,
-        keyPoints: slide.keyPoints || [],
+        // Normalize keyPoints: support both string[] (old format) and KeyPointWithSource[] (new format)
+        keyPoints: (slide.keyPoints || []).map((kp: any) => {
+          if (typeof kp === 'string') {
+            // Old format: convert string to KeyPointWithSource
+            return { content: kp, source: undefined };
+          } else if (kp && typeof kp === 'object' && 'content' in kp) {
+            // New format: already KeyPointWithSource
+            return kp;
+          } else {
+            // Invalid format: convert to string
+            return { content: String(kp), source: undefined };
+          }
+        }),
         contentBlocks: [], // Will be filled in Stage 2
         narration: slide.narration,
       })),
@@ -391,8 +395,66 @@ ${availableImagesText}
       remarks: designData.remarks,
       createdAt: new Date(),
       updatedAt: new Date(),
-      version: 1,
-    };
+        version: 1,
+      };
+
+      // Validate the generated design
+      validationResult = validateTeachingDesign(design);
+
+      log.info(`Attempt ${currentAttempt} validation result:`, {
+        isValid: validationResult.isValid,
+        issueCount: validationResult.issues.length,
+        stats: validationResult.stats,
+      });
+
+      // Log detailed statistics
+      const materialPercentage = validationResult.stats.totalItems > 0
+        ? ((validationResult.stats.materialUsage / validationResult.stats.totalItems) * 100).toFixed(1)
+        : '0.0';
+      const ragPercentage = validationResult.stats.totalItems > 0
+        ? ((validationResult.stats.ragUsage / validationResult.stats.totalItems) * 100).toFixed(1)
+        : '0.0';
+      const teacherPercentage = validationResult.stats.totalItems > 0
+        ? ((validationResult.stats.teacherUsage / validationResult.stats.totalItems) * 100).toFixed(1)
+        : '0.0';
+
+      log.info(`Attempt ${currentAttempt} - Three-source fusion statistics:`, {
+        materialUsage: `${validationResult.stats.materialUsage}/${validationResult.stats.totalItems} (${materialPercentage}%)`,
+        ragUsage: `${validationResult.stats.ragUsage}/${validationResult.stats.totalItems} (${ragPercentage}%)`,
+        teacherUsage: `${validationResult.stats.teacherUsage}/${validationResult.stats.totalItems} (${teacherPercentage}%)`,
+      });
+
+      // If validation passed, break the loop
+      if (validationResult.isValid) {
+        log.info(`✅ Validation passed on attempt ${currentAttempt}`);
+        break;
+      }
+
+      // If validation failed and we have retries left, continue
+      if (currentAttempt <= MAX_RETRIES) {
+        log.warn(`❌ Validation failed on attempt ${currentAttempt}, retrying...`, {
+          issues: validationResult.issues,
+        });
+        callbacks?.onProgress?.({
+          currentStage: 1,
+          overallProgress: 20 + currentAttempt * 10,
+          stageProgress: 75,
+          statusMessage: `校验未通过，准备重试...`,
+          scenesGenerated: 0,
+          totalScenes: 0,
+        });
+      } else {
+        log.error(`❌ Validation failed after ${MAX_RETRIES + 1} attempts, using last result`);
+      }
+    }
+
+    // Final result (either validated or last attempt)
+    if (!design) {
+      return {
+        success: false,
+        error: 'Failed to generate teaching design',
+      };
+    }
 
     callbacks?.onProgress?.({
       currentStage: 1,
@@ -403,24 +465,21 @@ ${availableImagesText}
       totalScenes: design.slides.length,
     });
 
-    // Calculate and log source usage statistics
-    const sourceStats = calculateSourceUsageStats(design);
-    log.info('Three-source fusion statistics:', {
-      materialUsage: sourceStats.materialUsage,
-      ragUsage: sourceStats.ragUsage,
-      teacherUsage: sourceStats.teacherUsage,
-      totalItems: sourceStats.totalItems,
-      materialPercentage: ((sourceStats.materialUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
-      ragPercentage: ((sourceStats.ragUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
-      teacherPercentage: ((sourceStats.teacherUsage / sourceStats.totalItems) * 100).toFixed(1) + '%',
-    });
-
     log.info(`Generated teaching design: ${design.slides.length} slides, ${design.procedures.length} procedures`);
     log.info('Three-source fusion applied:', {
       hasMaterials: parsedMaterials.textContent.length > 0,
       hasImages: parsedMaterials.images.length > 0,
       hasRAG: ragContext.length > 0,
     });
+
+    // Log final validation status
+    if (validationResult) {
+      log.info('Final validation status:', {
+        isValid: validationResult.isValid,
+        attempts: currentAttempt,
+        finalStats: validationResult.stats,
+      });
+    }
 
     return { success: true, data: design };
   } catch (error) {
