@@ -72,6 +72,17 @@ export async function parseTeachingMaterials(
           }
           break;
 
+        case 'docx':
+          if (material.parsedText) {
+            allText.push(`\n## 【${material.name}】\n${material.parsedText}`);
+            summaries.push(`${material.name}: Word文档`);
+          }
+          if (material.parsedImages && material.parsedImages.length > 0) {
+            allImages.push(...material.parsedImages);
+            log.info(`Extracted ${material.parsedImages.length} images from ${material.name}`);
+          }
+          break;
+
         default:
           log.warn(`Unsupported material type: ${material.type}`);
       }

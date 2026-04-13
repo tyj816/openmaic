@@ -14,8 +14,9 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('ContextBuilder');
 
 // Context length limits to avoid prompt explosion
+// Note: RAG context limit removed to allow full knowledge base content
 const MAX_MATERIAL_CONTEXT_CHARS = 3000;
-const MAX_RAG_CONTEXT_CHARS = 2000;
+const MAX_RAG_CONTEXT_CHARS = Infinity; // No limit for RAG content
 
 /**
  * Build teaching context bundle from three sources
@@ -32,7 +33,7 @@ export function buildTeachingContextBundle(
   ragContext: string,
   ragChunks?: RagChunk[]
 ): TeachingContextBundle {
-  log.info('Building teaching context bundle from three sources');
+  log.info('🔍 [3/4] Building teaching context bundle from three sources');
 
   // 1. Teacher Intent
   const teacherIntent = {
@@ -56,6 +57,27 @@ export function buildTeachingContextBundle(
   const safeRagContext = ragContext.slice(0, MAX_RAG_CONTEXT_CHARS);
   const ragTruncated = ragContext.length > MAX_RAG_CONTEXT_CHARS;
 
+  // 🔍 DEBUG: Print RAG chunks before merging
+  log.info('🔍 [3/4] RAG chunks received by ContextBuilder:', {
+    hasRagChunks: !!ragChunks,
+    chunkCount: ragChunks?.length || 0,
+    ragContextLength: ragContext.length,
+    safeRagContextLength: safeRagContext.length,
+  });
+
+  if (ragChunks && ragChunks.length > 0) {
+    ragChunks.forEach((chunk, index) => {
+      log.info(`🔍 [3/4] RAG chunk[${index}] in ContextBuilder:`, {
+        id: chunk.id,
+        contentLength: chunk.content.length,
+        contentPreview: chunk.content.substring(0, 100) + '...',
+        sourceName: chunk.sourceName,
+      });
+    });
+  } else {
+    log.warn('🔍 [3/4] ⚠️ No RAG chunks provided to ContextBuilder, will use raw ragContext');
+  }
+
   // 4. Build merged context
   const mergedContext = buildMergedContext(
     teacherIntent,
@@ -69,9 +91,21 @@ export function buildTeachingContextBundle(
     }
   );
 
-  log.info(`Context bundle built: ${mergedContext.length} chars total`);
+  log.info(`🔍 [3/4] Context bundle built: ${mergedContext.length} chars total`);
 
-  return {
+  // Calculate total RAG content length (prefer ragChunks over raw answer)
+  const totalRagContent = ragChunks && ragChunks.length > 0
+    ? ragChunks.map(c => c.content).join('')
+    : safeRagContext;
+
+  // 🔍 DEBUG: Print final RAG text that will be used
+  log.info('🔍 [3/4] Final RAG text calculation:', {
+    usedChunks: ragChunks && ragChunks.length > 0,
+    totalRagContentLength: totalRagContent.length,
+    totalRagContentPreview: totalRagContent.substring(0, 200) + '...',
+  });
+
+  const bundle = {
     teacherIntent,
     extractedFromMaterials: {
       textContent: materialContext,
@@ -80,13 +114,27 @@ export function buildTeachingContextBundle(
       suggestedStructure: undefined,
     },
     retrievedKnowledge: {
-      relevantChunks: safeRagContext ? [safeRagContext] : [],
+      relevantChunks: totalRagContent ? [totalRagContent] : [],
       references: [],
       confidence: undefined,
       ragChunks,
     },
     mergedContext,
   };
+
+  // 🔍 DEBUG: Print final bundle summary
+  log.info('🔍 [3/4] SUMMARY - Context bundle composition:', {
+    teacherIntentChars: JSON.stringify(teacherIntent).length,
+    materialContextChars: materialContext.length,
+    imageCount: parsedMaterials.images.length,
+    ragChunkCount: ragChunks?.length || 0,
+    totalRagChars: totalRagContent.length,
+    mergedContextChars: mergedContext.length,
+    relevantChunksCount: bundle.retrievedKnowledge.relevantChunks.length,
+    relevantChunksChars: bundle.retrievedKnowledge.relevantChunks.reduce((sum, c) => sum + c.length, 0),
+  });
+
+  return bundle;
 }
 
 /**

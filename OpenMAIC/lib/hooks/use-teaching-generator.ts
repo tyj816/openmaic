@@ -169,8 +169,16 @@ export function useTeachingGenerator() {
     [],
   );
 
+  const setDesign = useCallback((design: TeachingDesign) => {
+    setState((prev) => ({
+      ...prev,
+      design,
+    }));
+  }, []);
+
   return {
     ...state,
     generate,
+    setDesign,
   };
 }

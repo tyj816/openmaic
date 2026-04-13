@@ -16,7 +16,7 @@ import { createLogger } from '@/lib/logger';
 import { queryFastGPT } from '@/lib/ai/fastgpt-client';
 import { parseTeachingMaterials } from './teaching-material-parser';
 import { buildTeachingContextBundle } from './teaching-context-builder';
-import { validateTeachingDesign, buildRetryPrompt } from './fusion-validator';
+import { validateTeachingDesign, buildRetryPrompt, type ValidationResult } from './fusion-validator';
 
 const log = createLogger('TeachingGeneration');
 
@@ -156,16 +156,54 @@ export async function generateTeachingDesignFromRequest(
 
       // Extract and structure RAG chunks from quoteList
       if (result.quoteList && result.quoteList.length > 0) {
-        ragChunks = result.quoteList.map((quote) => ({
-          id: quote.id,
-          content: quote.q || quote.a || '',
-          sourceName: quote.sourceName,
-          chunkIndex: quote.chunkIndex,
-        }));
-        log.info(`Extracted ${ragChunks.length} RAG chunks for verification`);
+        log.info(`🔍 [2/4] Processing ${result.quoteList.length} quotes from FastGPT result`);
+        
+        ragChunks = result.quoteList.map((quote, index) => {
+          const content = quote.q || quote.a || '';
+          const chunk = {
+            id: quote.id,
+            content: content,
+            sourceName: quote.sourceName,
+            chunkIndex: quote.chunkIndex,
+          };
+          
+          // 🔍 DEBUG: Print each chunk extraction
+          log.info(`🔍 [2/4] RAG chunk[${index}]:`, {
+            id: chunk.id,
+            sourceName: chunk.sourceName,
+            contentLength: content.length,
+            contentPreview: content.substring(0, 150) + '...',
+            hasQ: !!quote.q,
+            hasA: !!quote.a,
+            qLength: quote.q?.length || 0,
+            aLength: quote.a?.length || 0,
+          });
+          
+          return chunk;
+        });
+        
+        const totalChunkChars = ragChunks.reduce((sum, c) => sum + c.content.length, 0);
+        log.info(`🔍 [2/4] SUMMARY: Extracted ${ragChunks.length} RAG chunks (${totalChunkChars} chars total) for verification`);
+        
+        // 🔍 DEBUG: Warn if total is 0
+        if (totalChunkChars === 0) {
+          log.error('🔍 [2/4] ⚠️ CRITICAL: All RAG chunks have 0 content! This will cause empty RAG context.');
+          log.error('🔍 [2/4] Quote details:', result.quoteList.map(q => ({
+            id: q.id,
+            hasQ: !!q.q,
+            hasA: !!q.a,
+            qLen: q.q?.length || 0,
+            aLen: q.a?.length || 0,
+          })));
+        }
+      } else {
+        log.warn('🔍 [2/4] No quoteList in FastGPT result, ragChunks will be undefined');
       }
 
-      log.info(`FastGPT query successful, retrieved ${ragContext.length} chars`);
+      const effectiveRagContent = ragChunks && ragChunks.length > 0
+        ? ragChunks.reduce((sum, c) => sum + c.content.length, 0)
+        : ragContext.length;
+      log.info(`FastGPT query successful, answer: ${ragContext.length} chars, effective RAG content: ${effectiveRagContent} chars`);
       callbacks?.onProgress?.({
         currentStage: 1,
         overallProgress: 10,
@@ -286,24 +324,25 @@ export async function generateTeachingDesignFromRequest(
 
 重要说明：
 1. keyPoints 必须使用对象格式，包含 content 和 source 字段
-2. source 字段标记内容来源：
-   - "teacher": 直接来自教师需求和教学目标
-   - "material": 来自参考资料的内容、术语、概念
-   - "knowledge": 来自知识库的专业知识和教学建议
+2. **source 字段标记内容来源（必须严格遵守）：**
+   - "teacher": 仅用于直接来自教师需求和教学目标的内容
+   - "material": 仅用于来自【参考资料内容】部分的内容、术语、概念
+   - "knowledge": 仅用于来自【知识库参考内容】部分的专业知识和教学建议
 3. **当 source 为 "knowledge" 时，必须填写 ragChunkId 字段，值为知识库片段的ID**
-4. 如果内容融合多个来源，选择主要来源标记
+4. **禁止所有内容都标记为同一来源，必须根据实际来源标记**
 5. slides 数组中只需要提供标题和要点，不需要具体的元素布局
 6. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
 7. 根据课时合理安排内容量
 8. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
 9. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
 
-三源融合要求：
-- 至少 30% 的 keyPoints 来自参考资料（source: "material"）
-- 至少 30% 的 keyPoints 来自知识库（source: "knowledge"）
-- 必须明确使用参考资料中的关键术语和知识库中的专业概念
-- 不允许所有内容都标记为同一来源
-- **标记为 knowledge 的内容必须能在知识库片段中找到，并正确填写 ragChunkId**`;
+三源融合指导原则（灵活建议，非硬性要求）：
+- 如果提供了参考资料，建议适当使用其中的关键术语和概念，标记为 source: "material"
+- 如果提供了知识库内容，建议适当引用其中的专业知识，标记为 source: "knowledge"
+- **必须根据内容实际来源标记，不允许随意标记或全部标记为 teacher**
+- 根据教学场景和内容需要，灵活使用三种来源，不强制要求固定比例
+- **标记为 knowledge 的内容必须能在知识库片段中找到，并正确填写 ragChunkId**
+- 教学质量和内容完整性优先于来源分布比例`;
 
   // Use merged context from three-source bundle
   const userPrompt = `${contextBundle.mergedContext}
@@ -318,12 +357,13 @@ ${availableImagesText}
 1. 每个 keyPoint 必须包含 content 和 source 字段
 2. 当 source 为 "knowledge" 时，必须在内容中标注"（来自知识库片段X）"，并填写 ragChunkId 字段
 3. ragChunkId 必须是上文提供的知识库片段的真实ID
-4. 确保三源内容分布均衡，来源可验证`;
+4. 根据教学需要灵活使用三种来源，不强制要求固定比例
+5. 确保教学内容的质量和完整性，来源标记真实可验证`;
 
   // Step 7: Generate with validation and retry mechanism
-  const MAX_RETRIES = 2;
+  const MAX_RETRIES = 1;
   let currentAttempt = 0;
-  let validationResult: { isValid: boolean; issues: string[]; stats: SourceUsageStats } | null = null;
+  let validationResult: ValidationResult | null = null;
   let design: TeachingDesign | null = null;
 
   try {
@@ -354,6 +394,23 @@ ${availableImagesText}
       }
 
       const response = await aiCall(systemPrompt, finalUserPrompt, visionImages);
+      
+      // 🔍 DEBUG: Print the complete prompt sent to LLM
+      log.info('🔍 [4/4] Complete prompt sent to PPT generation model:');
+      log.info('🔍 [4/4] ===== SYSTEM PROMPT =====');
+      log.info(systemPrompt);
+      log.info('🔍 [4/4] ===== USER PROMPT (first 2000 chars) =====');
+      log.info(finalUserPrompt.substring(0, 2000));
+      log.info('🔍 [4/4] ===== USER PROMPT (last 1000 chars) =====');
+      log.info(finalUserPrompt.substring(Math.max(0, finalUserPrompt.length - 1000)));
+      log.info('🔍 [4/4] ===== PROMPT STATS =====', {
+        systemPromptLength: systemPrompt.length,
+        userPromptLength: finalUserPrompt.length,
+        totalPromptLength: systemPrompt.length + finalUserPrompt.length,
+        hasVisionImages: !!visionImages && visionImages.length > 0,
+        visionImageCount: visionImages?.length || 0,
+      });
+      
       const designData = parseJsonResponse<Partial<TeachingDesign>>(response);
 
       if (!designData || !designData.slides || !Array.isArray(designData.slides)) {
@@ -418,12 +475,14 @@ ${availableImagesText}
       };
 
       // Validate the generated design
-      validationResult = validateTeachingDesign(design, ragChunks);
+      validationResult = validateTeachingDesign(design, ragChunks, parsedMaterials.textContent.length > 0);
 
       log.info(`Attempt ${currentAttempt} validation result:`, {
         isValid: validationResult.isValid,
         issueCount: validationResult.issues.length,
+        warningCount: validationResult.warnings.length,
         stats: validationResult.stats,
+        ragAlignment: validationResult.ragAlignment,
       });
 
       // Log detailed statistics
@@ -441,24 +500,34 @@ ${availableImagesText}
         materialUsage: `${validationResult.stats.materialUsage}/${validationResult.stats.totalItems} (${materialPercentage}%)`,
         ragUsage: `${validationResult.stats.ragUsage}/${validationResult.stats.totalItems} (${ragPercentage}%)`,
         teacherUsage: `${validationResult.stats.teacherUsage}/${validationResult.stats.totalItems} (${teacherPercentage}%)`,
+        ragAlignment: validationResult.ragAlignment ? {
+          successCount: validationResult.ragAlignment.successCount,
+          failureCount: validationResult.ragAlignment.failureCount,
+          alignmentRate: `${validationResult.ragAlignment.alignmentRate.toFixed(1)}%`,
+        } : 'N/A',
       });
 
-      // If validation passed, break the loop
+      // Log warnings separately (informational only)
+      if (validationResult.warnings.length > 0) {
+        log.info(`Attempt ${currentAttempt} - Non-critical warnings:`, validationResult.warnings);
+      }
+
+      // If validation passed (no critical issues), break the loop
       if (validationResult.isValid) {
-        log.info(`✅ Validation passed on attempt ${currentAttempt}`);
+        log.info(`✅ Validation passed on attempt ${currentAttempt} (${validationResult.warnings.length} warnings)`);
         break;
       }
 
-      // If validation failed and we have retries left, continue
+      // If validation failed (critical issues) and we have retries left, continue
       if (currentAttempt <= MAX_RETRIES) {
-        log.warn(`❌ Validation failed on attempt ${currentAttempt}, retrying...`, {
+        log.warn(`❌ Validation failed on attempt ${currentAttempt} (critical issues found), retrying...`, {
           issues: validationResult.issues,
         });
         callbacks?.onProgress?.({
           currentStage: 1,
           overallProgress: 20 + currentAttempt * 10,
           stageProgress: 75,
-          statusMessage: `校验未通过，准备重试...`,
+          statusMessage: `发现关键问题，准备重试...`,
           scenesGenerated: 0,
           totalScenes: 0,
         });
@@ -497,6 +566,8 @@ ${availableImagesText}
         isValid: validationResult.isValid,
         attempts: currentAttempt,
         finalStats: validationResult.stats,
+        criticalIssues: validationResult.issues.length,
+        warnings: validationResult.warnings.length,
       });
     }
 

@@ -108,27 +108,112 @@ export async function queryFastGPT(
     const data = await response.json();
 
     // 🔍 调试：打印完整响应结构
-    log.info('FastGPT raw response:', JSON.stringify(data, null, 2));
+    log.info('🔍 [DEBUG] FastGPT complete raw response structure:');
+    log.info(JSON.stringify(data, null, 2));
 
     // Extract quoteList from responseData if available
     let quoteList: FastGPTQuoteItem[] | undefined;
+    
+    // Step 1: Extract quote metadata from datasetSearchNode
+    const quoteMetadata: Map<string, any> = new Map();
     if (data.responseData && Array.isArray(data.responseData)) {
       const datasetSearchNode = data.responseData.find(
         (node: any) => node.moduleType === 'datasetSearchNode'
       );
+      
       if (datasetSearchNode?.quoteList && Array.isArray(datasetSearchNode.quoteList)) {
-        quoteList = datasetSearchNode.quoteList.map((quote: any) => ({
-          id: quote.id,
-          chunkIndex: quote.chunkIndex,
-          datasetId: quote.datasetId,
-          collectionId: quote.collectionId,
-          sourceId: quote.sourceId,
-          sourceName: quote.sourceName,
-          q: quote.q,
-          a: quote.a,
-        }));
-        log.info(`Extracted ${quoteList.length} quote chunks from FastGPT response`);
+        datasetSearchNode.quoteList.forEach((quote: any) => {
+          quoteMetadata.set(quote.id, quote);
+        });
+        log.info(`🔍 [1/4] Found ${quoteMetadata.size} quote metadata entries`);
       }
+    }
+    
+    // Step 2: Extract actual content from AI chat node's historyPreview
+    const contentMap: Map<string, string> = new Map();
+    if (data.responseData && Array.isArray(data.responseData)) {
+      const chatNode = data.responseData.find(
+        (node: any) => node.moduleType === 'chatNode'
+      );
+      
+      if (chatNode?.historyPreview && Array.isArray(chatNode.historyPreview)) {
+        for (const historyItem of chatNode.historyPreview) {
+          if (historyItem.obj === 'System' && historyItem.value) {
+            // Extract content from <Cites> tags
+            const citesMatch = historyItem.value.match(/<Cites>\s*\n?\s*(\{[\s\S]*?\})\s*\n?\s*<\/Cites>/);
+            if (citesMatch) {
+              try {
+                let citesContent = citesMatch[1].trim();
+                
+                // The content field in the JSON contains raw text with newlines
+                // We need to extract it differently to avoid JSON parsing issues
+                const idMatch = citesContent.match(/"id":\s*"([^"]+)"/);
+                const contentMatch = citesContent.match(/"content":\s*"([\s\S]*?)"\s*\n?\s*\}/);
+                
+                if (idMatch && contentMatch) {
+                  const id = idMatch[1];
+                  // The content is already a string, but may have escaped characters
+                  // We need to unescape it properly
+                  let content = contentMatch[1];
+                  
+                  // Unescape common escape sequences
+                  content = content
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\r/g, '\r')
+                    .replace(/\\t/g, '\t')
+                    .replace(/\\"/g, '"')
+                    .replace(/\\\\/g, '\\');
+                  
+                  contentMap.set(id, content);
+                  log.info(`🔍 [1/4] Extracted content for ID ${id}: ${content.length} chars`);
+                } else {
+                  log.warn('🔍 [1/4] Could not extract id or content from Cites');
+                }
+              } catch (e) {
+                log.error('🔍 [1/4] Failed to parse Cites content:', e);
+                log.error('🔍 [1/4] Cites match content (first 500 chars):', citesMatch[1].substring(0, 500));
+              }
+            } else {
+              log.warn('🔍 [1/4] No <Cites> tags found in System message');
+            }
+          }
+        }
+      }
+    }
+    
+    // Step 3: Merge metadata with content
+    if (quoteMetadata.size > 0) {
+      quoteList = Array.from(quoteMetadata.entries()).map(([id, metadata]) => {
+        const content = contentMap.get(id) || '';
+        const quote: FastGPTQuoteItem = {
+          id: metadata.id,
+          chunkIndex: metadata.chunkIndex,
+          datasetId: metadata.datasetId,
+          collectionId: metadata.collectionId,
+          sourceId: metadata.sourceId,
+          sourceName: metadata.sourceName,
+          q: content, // Use extracted content as 'q'
+          a: undefined,
+        };
+        
+        log.info(`🔍 [1/4] Merged quote[${id}]:`, {
+          id: quote.id,
+          sourceName: quote.sourceName,
+          contentLength: content.length,
+          contentPreview: content.substring(0, 150) + '...',
+        });
+        
+        return quote;
+      });
+      
+      const totalQuoteChars = quoteList.reduce((sum, q) => sum + (q.q?.length || 0), 0);
+      log.info(`🔍 [1/4] SUMMARY: Extracted ${quoteList.length} quote chunks (${totalQuoteChars} chars total) from FastGPT response`);
+      
+      if (totalQuoteChars === 0) {
+        log.error('🔍 [1/4] ⚠️ CRITICAL: All quotes have 0 content after merging!');
+      }
+    } else {
+      log.warn('🔍 [1/4] No quote metadata found in datasetSearchNode');
     }
 
     // FastGPT 可能返回两种格式：

@@ -19,20 +19,19 @@ const log = createLogger('TeachingTest');
 // 预设测试场景
 const TEST_SCENARIOS = [
   {
-    name: '毛泽东思想的活的灵魂',
+    name: '寓言故事《会说话的石头》',
     request: {
-      subject: '思想政治',
-      topic: '毛泽东思想的活的灵魂',
-      gradeLevel: '大学本科',
-      duration: 45,
+      subject: '语文',
+      topic: '寓言故事《会说话的石头》',
+      gradeLevel: '小学四年级',
+      duration: 20,
       language: 'zh-CN' as const,
       useKnowledgeBase: true,
       objectives: {
-        knowledge: ['理解实事求是、群众路线、独立自主的基本内涵'],
-        skills: ['能够运用毛泽东思想分析现实问题'],
-        attitude: ['增强对毛泽东思想的认同感'],
+        knowledge: ['了解《会说话的石头》的主要角色、故事情节和寓意。'],
+        skills: ['能够梳理故事发展顺序，并用自己的话概括故事寓意。'],
       },
-      additionalNotes: '重点讲解实事求是的核心地位，结合具体历史案例',
+      additionalNotes: '内容结构清晰，适合课堂讲授，PPT控制在4页左右。',
     },
   },
   {
@@ -67,15 +66,19 @@ const TEST_SCENARIOS = [
     },
   },
   {
-    name: '社会主义建设道路初步探索',
+    name: '星环教育公司',
     request: {
-      subject: '思想政治',
-      topic: '社会主义建设道路初步探索的理论成果',
-      gradeLevel: '大学本科',
-      duration: 45,
+      subject: '信息技术',
+      topic: '星环智能教育公司发展史',
+      gradeLevel: '高一',
+      duration: 10,
       language: 'zh-CN' as const,
       useKnowledgeBase: true,
-      additionalNotes: '重点分析《论十大关系》和《关于正确处理人民内部矛盾的问题》',
+      objectives: {
+        knowledge: ['了解星环智能教育科技有限公司的成立时间、创始人、总部地点以及主要发展阶段。'],
+        skills: ['能够梳理公司发展脉络，并总结企业在智能教育领域的阶段性成果。'],
+      },
+      additionalNotes: '内容结构清晰，适合课堂讲授，PPT控制在4页左右。',
     },
   },
   {
@@ -133,6 +136,24 @@ export default function TeachingTestPage() {
             };
             setMaterials(prev => [...prev, material]);
             log.info(`PDF parsed: ${file.name}, ${parsedPdf.images.length} images`);
+          }
+        } else if (fileType === 'docx') {
+          // Parse DOCX using API
+          const parsedDocx = await parseDocxFile(file);
+          if (parsedDocx) {
+            const material: ReferenceMaterial = {
+              id: nanoid(),
+              type: 'docx',
+              name: file.name,
+              parsedText: parsedDocx.text,
+              parsedImages: parsedDocx.images,
+              metadata: {
+                uploadedAt: new Date(),
+                size: file.size,
+              },
+            };
+            setMaterials(prev => [...prev, material]);
+            log.info(`DOCX parsed: ${file.name}, ${parsedDocx.images.length} images`);
           }
         } else if (fileType === 'image') {
           // Handle image upload
@@ -214,6 +235,109 @@ export default function TeachingTestPage() {
     }
   };
 
+  const [exportingDocx, setExportingDocx] = useState(false);
+  const [feedbackInput, setFeedbackInput] = useState('');
+  const [regenerating, setRegenerating] = useState(false);
+
+  const handleExportDocx = async () => {
+    if (!generator.design) return;
+
+    setExportingDocx(true);
+    try {
+      const response = await fetch('/api/generate-docx', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          teachingDesign: generator.design,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || 'DOCX generation failed');
+      }
+
+      // Download the file
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${generator.design.title}_教案.docx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      log.info('DOCX exported successfully');
+    } catch (error) {
+      log.error('Failed to export DOCX:', error);
+      alert(`导出 DOCX 失败：${error}`);
+    } finally {
+      setExportingDocx(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!generator.design || !feedbackInput.trim()) {
+      alert('请输入修改要求');
+      return;
+    }
+
+    setRegenerating(true);
+    try {
+      // 构建 imageMapping 和 assignedImages
+      const imageMapping: Record<string, string> = {};
+      const assignedImages: any[] = [];
+      
+      materials.forEach(material => {
+        material.parsedImages?.forEach(img => {
+          imageMapping[img.id] = img.src;
+          assignedImages.push(img);
+        });
+      });
+
+      const response = await fetch('/api/regenerate-teaching', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          design: generator.design,
+          instruction: feedbackInput,
+          modelString: 'glm:glm-4.7',
+          apiKey: 'a61159bfaa7949b98ca9863e4350217b.qZiaDB1pjuLuuADv',
+          baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+          language: request.language,
+          imageMapping,
+          assignedImages,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Regeneration failed');
+      }
+
+      const result = await response.json();
+      
+      if (result.success && result.design) {
+        generator.setDesign(result.design);
+        setFeedbackInput('');
+        alert('修改成功！PPT 页面已同步更新');
+        log.info('Design and canvas regenerated successfully');
+      } else {
+        throw new Error('Invalid response from server');
+      }
+    } catch (error) {
+      log.error('Failed to regenerate:', error);
+      alert(`修改失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
   return (
     <div className="container mx-auto p-8">
       <h1 className="text-3xl font-bold mb-8">教学设计生成测试</h1>
@@ -243,11 +367,11 @@ export default function TeachingTestPage() {
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium mb-2">
-              上传 PDF 或图片（支持 PDF、PNG、JPG、JPEG、WEBP）
+              上传 PDF、Word 或图片（支持 PDF、DOCX、DOC、PNG、JPG、JPEG、WEBP）
             </label>
             <input
               type="file"
-              accept=".pdf,image/png,image/jpeg,image/jpg,image/webp"
+              accept=".pdf,.docx,.doc,image/png,image/jpeg,image/jpg,image/webp"
               multiple
               onChange={handleFileUpload}
               disabled={uploading}
@@ -270,7 +394,7 @@ export default function TeachingTestPage() {
                   <li key={material.id} className="flex items-center justify-between bg-white p-2 rounded border">
                     <div className="flex items-center space-x-2">
                       <span className="text-lg">
-                        {material.type === 'pdf' ? '📄' : '🖼️'}
+                        {material.type === 'pdf' ? '📄' : material.type === 'docx' ? '📝' : '🖼️'}
                       </span>
                       <div className="text-sm">
                         <div className="font-medium">{material.name}</div>
@@ -422,6 +546,14 @@ export default function TeachingTestPage() {
         >
           {exporter.exporting ? '导出中...' : '导出 PPT'}
         </button>
+
+        <button
+          onClick={handleExportDocx}
+          disabled={!generator.design || exportingDocx}
+          className="px-6 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+        >
+          {exportingDocx ? '导出中...' : '导出 Word 教案'}
+        </button>
       </div>
 
       {generator.isGenerating && (
@@ -445,6 +577,33 @@ export default function TeachingTestPage() {
       {generator.design && (
         <div className="border rounded p-6">
           <h2 className="text-2xl font-bold mb-4">{generator.design.title}</h2>
+
+          {/* 反馈输入框 */}
+          <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded">
+            <h3 className="font-semibold mb-3 text-yellow-800">💬 修改建议</h3>
+            <div className="space-y-3">
+              <textarea
+                value={feedbackInput}
+                onChange={(e) => setFeedbackInput(e.target.value)}
+                placeholder="例如：第3页增加更多示例&#10;第一页改成更生动的内容&#10;修改第2页的讲解，增加互动环节"
+                className="w-full px-3 py-2 border rounded text-sm resize-none"
+                rows={3}
+                disabled={regenerating}
+              />
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-600">
+                  💡 支持格式：「第X页」「第一页」「修改第X页」等
+                </p>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={!feedbackInput.trim() || regenerating}
+                  className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50 text-sm"
+                >
+                  {regenerating ? '修改中...' : '提交修改'}
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div className="mb-4">
             <h3 className="font-semibold mb-2">教学目标</h3>
@@ -506,8 +665,10 @@ export default function TeachingTestPage() {
 
 // Helper functions
 
-function getFileType(file: File): 'pdf' | 'image' | 'other' {
+function getFileType(file: File): 'pdf' | 'docx' | 'image' | 'other' {
   if (file.type === 'application/pdf') return 'pdf';
+  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';
+  if (file.type === 'application/msword') return 'docx'; // .doc files
   if (file.type.startsWith('image/')) return 'image';
   return 'other';
 }
@@ -555,6 +716,41 @@ async function parsePdfFile(file: File): Promise<{
     };
   } catch (error) {
     log.error('Failed to parse PDF:', error);
+    return null;
+  }
+}
+
+async function parseDocxFile(file: File): Promise<{
+  text: string;
+  images: ParsedImage[];
+} | null> {
+  try {
+    const formData = new FormData();
+    formData.append('docx', file);
+
+    const response = await fetch('/api/parse-docx', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`DOCX parsing failed: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    if (!result.success || !result.data) {
+      throw new Error('DOCX parsing returned no data');
+    }
+
+    const docxData = result.data;
+    const images: ParsedImage[] = docxData.images || [];
+
+    return {
+      text: docxData.text || '',
+      images,
+    };
+  } catch (error) {
+    log.error('Failed to parse DOCX:', error);
     return null;
   }
 }
