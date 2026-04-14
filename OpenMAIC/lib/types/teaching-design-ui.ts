@@ -1,5 +1,5 @@
 // 教学设计 UI 层类型定义
-// 这些类型仅用于前端 UI 状态管理，不涉及业务逻辑
+// 这些类型仅用于前端 UI 状态管理与 ViewModel 映射
 
 export interface ProjectSummary {
   subject: string;
@@ -9,7 +9,7 @@ export interface ProjectSummary {
 }
 
 export interface IntentMessage {
-  id: number;
+  id: string;
   role: "ai" | "teacher";
   title: string;
   content: string;
@@ -17,7 +17,7 @@ export interface IntentMessage {
 }
 
 export interface UploadedFile {
-  id: number;
+  id: string;
   name: string;
   type: string;
   size: string;
@@ -25,12 +25,17 @@ export interface UploadedFile {
 }
 
 export interface Slide {
-  id: number;
+  id: string;
   type: string;
   title: string;
   tag: string;
   status: string;
   desc: string;
+  pageNo: number;
+  bullets: string[];
+  narration?: string;
+  hasCanvas?: boolean;
+  canvasSummary?: string;
 }
 
 export interface LessonSection {
@@ -46,16 +51,30 @@ export interface DesignSummary {
   goals: string[];
   highlights: string[];
   difficulties: string[];
+  boardDesign?: string;
+  homework?: string[];
 }
 
 export interface EvidenceItem {
   type: string;
   chunkId: string;
   content: string;
+  slideId: string;
+  slideTitle: string;
+  source?: string;
+  sourceDetail?: string;
 }
 
 export interface WorkflowStep {
   label: string;
   done: boolean;
   active: boolean;
+}
+
+export interface WorkspaceViewModel {
+  designSummary: DesignSummary;
+  slides: Slide[];
+  lessonSections: LessonSection[];
+  evidenceItems: EvidenceItem[];
+  workflowSteps: WorkflowStep[];
 }

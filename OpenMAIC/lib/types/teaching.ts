@@ -130,6 +130,11 @@ export interface TeachingSlide {
   title: string;
   description?: string; // Teaching purpose for this slide (1-2 sentences)
   type?: 'cover' | 'contents' | 'transition' | 'content' | 'end';
+  teachingObjective?: string; // Teaching objective for this slide
+  visualIntent?: string; // Visual strategy hint, e.g. 图文讲解/对比归纳/步骤拆解
+  preferredLayout?: string; // Preferred layout family for PPT generation
+  densityHint?: 'sparse' | 'balanced' | 'dense'; // Content density hint for layout
+  suggestedImageIds?: string[]; // Preferred images for this slide
 
   // Teaching content with source tracking
   keyPoints: KeyPointWithSource[];

@@ -84,6 +84,8 @@ export async function POST(request: NextRequest) {
         system,
         messages,
         maxRetries: 3,
+        temperature: 0.2,
+        maxOutputTokens: 12000,
       });
 
       log.debug('LLM call successful, response length:', result.text.length);

@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { 
       design, 
-      instruction, 
+      instruction,
+      augmentedInstruction,
+      activeSlideId,
+      activeSlideIndex,
+      activeSlideTitle,
       modelString, 
       apiKey, 
       baseUrl,
@@ -29,6 +33,10 @@ export async function POST(req: NextRequest) {
     } = body as {
       design: TeachingDesign;
       instruction: string;
+      augmentedInstruction?: string;
+      activeSlideId?: string;
+      activeSlideIndex?: number;
+      activeSlideTitle?: string;
       modelString?: string;
       apiKey?: string;
       baseUrl?: string;
@@ -44,9 +52,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const effectiveInstruction = augmentedInstruction || instruction;
+
     log.info('Regenerating teaching design:', {
       designId: design.id,
       instruction,
+      effectiveInstruction,
+      activeSlideId,
+      activeSlideIndex,
+      activeSlideTitle,
       slideCount: design.slides.length,
     });
 
@@ -78,7 +92,8 @@ export async function POST(req: NextRequest) {
     // Step 1: 调用再生成逻辑（修改 slide 内容）
     const updatedDesign = await regenerateTeachingDesign({
       design,
-      instruction,
+      instruction: effectiveInstruction,
+      activeSlideId,
       aiCall,
     });
 

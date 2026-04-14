@@ -8,7 +8,7 @@
 import { nanoid } from 'nanoid';
 import katex from 'katex';
 import { MAX_VISION_IMAGES } from '@/lib/constants/generation';
-import type { TeachingSlide, ParsedImage } from '@/lib/types/teaching';
+import type { TeachingSlide, ParsedImage, KeyPointWithSource } from '@/lib/types/teaching';
 import type { Slide, PPTElement, SlideTheme, SlideBackground } from '@/lib/types/slides';
 import type { ImageMapping } from '@/lib/types/generation';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
@@ -48,16 +48,22 @@ export async function generateSlideFromTeachingSlide(
   visionEnabled?: boolean,
   language: 'zh-CN' | 'en-US' = 'zh-CN',
 ): Promise<Slide | null> {
+  const prioritizedAssignedImages = teachingSlide.suggestedImageIds?.length
+    ? teachingSlide.suggestedImageIds
+        .map((id) => assignedImages?.find((img) => img.id === id))
+        .filter((img): img is ParsedImage => Boolean(img))
+    : assignedImages;
+
   // Build assigned images description
   let assignedImagesText = '无可用图片，禁止插入任何 image 元素';
   let visionImages: Array<{ id: string; src: string }> | undefined;
 
-  if (assignedImages && assignedImages.length > 0) {
+  if (prioritizedAssignedImages && prioritizedAssignedImages.length > 0) {
     if (visionEnabled && imageMapping) {
-      const withSrc = assignedImages.filter((img) => imageMapping[img.id]);
+      const withSrc = prioritizedAssignedImages.filter((img) => imageMapping[img.id]);
       const visionSlice = withSrc.slice(0, MAX_VISION_IMAGES);
       const textOnlySlice = withSrc.slice(MAX_VISION_IMAGES);
-      const noSrcImages = assignedImages.filter((img) => !imageMapping[img.id]);
+      const noSrcImages = prioritizedAssignedImages.filter((img) => !imageMapping[img.id]);
 
       const visionDescriptions = visionSlice.map((img) =>
         formatImagePlaceholder(img, language),
@@ -74,7 +80,7 @@ export async function generateSlideFromTeachingSlide(
         height: img.height,
       }));
     } else {
-      assignedImagesText = assignedImages
+      assignedImagesText = prioritizedAssignedImages
         .map((img) => formatImageDescription(img, language))
         .join('\n');
     }
@@ -85,21 +91,40 @@ export async function generateSlideFromTeachingSlide(
   const canvasHeight = 562.5;
 
   // Extract content from KeyPointWithSource objects (support both old string[] and new object[] format)
-  const keyPointsContent = teachingSlide.keyPoints.map((kp) => 
-    typeof kp === 'string' ? kp : kp.content
+  const keyPointsContent = teachingSlide.keyPoints.map((kp) =>
+    typeof kp === 'string' ? kp : kp.content,
   );
-  
+
+  const layoutHints = [
+    teachingSlide.teachingObjective ? `教学目标：${teachingSlide.teachingObjective}` : null,
+    teachingSlide.visualIntent ? `视觉意图：${teachingSlide.visualIntent}` : null,
+    teachingSlide.preferredLayout ? `偏好版式：${teachingSlide.preferredLayout}` : null,
+    teachingSlide.densityHint ? `内容密度：${teachingSlide.densityHint}` : null,
+  ]
+    .filter(Boolean)
+    .join('；');
+
+  const enrichedDescription = [teachingSlide.description, layoutHints]
+    .filter(Boolean)
+    .join('；');
+
+  const enrichedKeyPoints = [
+    ...keyPointsContent,
+    ...(teachingSlide.suggestedImageIds?.length
+      ? [`优先使用图片：${teachingSlide.suggestedImageIds.join(', ')}`]
+      : []),
+  ];
+
   // Use the original high-quality slide content prompt system
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
     title: teachingSlide.title,
-    description: teachingSlide.description || keyPointsContent.join('; '),
-    keyPoints: keyPointsContent.map((p, i) => `${i + 1}. ${p}`).join('\n'),
+    description: enrichedDescription || keyPointsContent.join('; '),
+    keyPoints: enrichedKeyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n'),
     assignedImages: assignedImagesText,
     canvas_width: canvasWidth,
     canvas_height: canvasHeight,
     teacherContext: '', // Empty for teaching slides
   });
-
   if (!prompts) {
     log.error(`Failed to build prompts for slide: ${teachingSlide.title}`);
     return null;

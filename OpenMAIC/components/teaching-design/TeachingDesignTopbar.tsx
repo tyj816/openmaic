@@ -1,15 +1,28 @@
 "use client";
 
-import { ArrowLeft, Clock3, GraduationCap, Sparkles } from "lucide-react";
+import { ArrowLeft, Clock3, Download, FileText, GraduationCap, Loader2, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 interface TeachingDesignTopbarProps {
   stage: "intent" | "workspace";
   onBack?: () => void;
+  canExport?: boolean;
+  onExportPpt?: () => void;
+  onExportDocx?: () => void;
+  isExportingPpt?: boolean;
+  isExportingDocx?: boolean;
 }
 
-export function TeachingDesignTopbar({ stage, onBack }: TeachingDesignTopbarProps) {
+export function TeachingDesignTopbar({
+  stage,
+  onBack,
+  canExport = false,
+  onExportPpt,
+  onExportDocx,
+  isExportingPpt = false,
+  isExportingDocx = false,
+}: TeachingDesignTopbarProps) {
   return (
     <div className="border-b border-white/60 bg-white/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-[1720px] items-center justify-between px-5 lg:px-8">
@@ -47,13 +60,30 @@ export function TeachingDesignTopbar({ stage, onBack }: TeachingDesignTopbarProp
         </div>
 
         <div className="flex items-center gap-2">
-          <Badge
-            variant="outline"
-            className="rounded-full border-indigo-200 bg-indigo-50 px-3 py-1 text-indigo-700"
-          >
-            当前项目：五年级语文公开课
-          </Badge>
-          <Button variant="outline" className="rounded-xl border-slate-200 bg-white/80">
+         
+          {stage === "workspace" ? (
+            <>
+              <Button
+                variant="outline"
+                className="rounded-xl border-slate-200 bg-white/80"
+                onClick={onExportPpt}
+                disabled={!canExport || isExportingPpt || isExportingDocx}
+              >
+                {isExportingPpt ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                {isExportingPpt ? "导出 PPT 中..." : "导出 PPT"}
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl border-slate-200 bg-white/80"
+                onClick={onExportDocx}
+                disabled={!canExport || isExportingDocx || isExportingPpt}
+              >
+                {isExportingDocx ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                {isExportingDocx ? "导出 DOCX 中..." : "导出教案 DOCX"}
+              </Button>
+            </>
+          ) : null}
+          <Button variant="outline" className="rounded-xl border-slate-200 bg-white/80" disabled>
             <Clock3 className="mr-2 h-4 w-4" />
             历史版本
           </Button>

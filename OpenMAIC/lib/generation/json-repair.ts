@@ -6,6 +6,56 @@ import { jsonrepair } from 'jsonrepair';
 import { createLogger } from '@/lib/logger';
 const log = createLogger('Generation');
 
+function escapeInnerQuotes(jsonStr: string): string {
+  let result = '';
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < jsonStr.length; i++) {
+    const char = jsonStr[i];
+
+    if (escapeNext) {
+      result += char;
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result += char;
+      if (inString) {
+        escapeNext = true;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      if (!inString) {
+        inString = true;
+        result += char;
+        continue;
+      }
+
+      let j = i + 1;
+      while (j < jsonStr.length && /\s/.test(jsonStr[j])) {
+        j++;
+      }
+      const nextSignificant = jsonStr[j];
+
+      if (nextSignificant === ',' || nextSignificant === '}' || nextSignificant === ']' || nextSignificant === ':' || nextSignificant === undefined) {
+        inString = false;
+        result += char;
+      } else {
+        result += '\\"';
+      }
+      continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
 export function parseJsonResponse<T>(response: string): T | null {
   // Strategy 1: Try to extract JSON from markdown code blocks (may have multiple)
   const codeBlockMatches = response.matchAll(/```(?:json)?\s*([\s\S]*?)```/g);
@@ -109,7 +159,10 @@ export function tryParseJson<T>(jsonStr: string): T | null {
   try {
     let fixed = jsonStr;
 
-    // Fix 1: Handle LaTeX-style escapes that break JSON (e.g., \frac, \left, \right, \times, etc.)
+    // Fix 1: Escape unescaped inner quotes inside string values
+    fixed = escapeInnerQuotes(fixed);
+
+    // Fix 2: Handle LaTeX-style escapes that break JSON (e.g., \frac, \left, \right, \times, etc.)
     // These are common in math content and need to be double-escaped
     // Match backslash followed by letters (LaTeX commands) inside strings
     fixed = fixed.replace(/"([^"]*?)"/g, (_match, content) => {
@@ -118,7 +171,7 @@ export function tryParseJson<T>(jsonStr: string): T | null {
       return `"${fixedContent}"`;
     });
 
-    // Fix 2: Fix other invalid escape sequences (e.g., \S, \L, etc.)
+    // Fix 3: Fix other invalid escape sequences (e.g., \S, \L, etc.)
     // Valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
     fixed = fixed.replace(/\\([^"\\\/bfnrtu\n\r])/g, (match, char) => {
       // If it's a letter, it's likely a LaTeX command
@@ -128,7 +181,7 @@ export function tryParseJson<T>(jsonStr: string): T | null {
       return match;
     });
 
-    // Fix 3: Try to fix truncated JSON arrays/objects
+    // Fix 4: Try to fix truncated JSON arrays/objects
     const trimmed = fixed.trim();
     if (trimmed.startsWith('[') && !trimmed.endsWith(']')) {
       const lastCompleteObj = fixed.lastIndexOf('}');

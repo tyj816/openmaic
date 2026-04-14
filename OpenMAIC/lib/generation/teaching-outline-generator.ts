@@ -300,6 +300,11 @@ export async function generateTeachingDesignFromRequest(
       "title": "页面标题",
       "description": "这一页的教学目的（1-2句）",
       "type": "cover" | "content" | "transition" | "end",
+      "teachingObjective": "本页希望学生学会什么或关注什么",
+      "visualIntent": "建议的视觉呈现方式，如图文讲解/对比归纳/步骤拆解/总结回顾",
+      "preferredLayout": "建议版式，如hero/two-column/comparison/steps/summary",
+      "densityHint": "sparse" | "balanced" | "dense",
+      "suggestedImageIds": ["img_1", "img_2"],
       "keyPoints": [
         {
           "content": "本页要点内容",
@@ -331,10 +336,12 @@ export async function generateTeachingDesignFromRequest(
 3. **当 source 为 "knowledge" 时，必须填写 ragChunkId 字段，值为知识库片段的ID**
 4. **禁止所有内容都标记为同一来源，必须根据实际来源标记**
 5. slides 数组中只需要提供标题和要点，不需要具体的元素布局
-6. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
-7. 根据课时合理安排内容量
-8. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
-9. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
+6. 每个 slide 都要补充 teachingObjective、visualIntent、preferredLayout、densityHint
+7. 如果存在可用图片，为每页输出 suggestedImageIds，优先填最适合该页的 0-2 张图片 ID
+8. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
+9. 根据课时合理安排内容量
+10. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
+11. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
 
 三源融合指导原则（灵活建议，非硬性要求）：
 - 如果提供了参考资料，建议适当使用其中的关键术语和概念，标记为 source: "material"
@@ -358,7 +365,8 @@ ${availableImagesText}
 2. 当 source 为 "knowledge" 时，必须在内容中标注"（来自知识库片段X）"，并填写 ragChunkId 字段
 3. ragChunkId 必须是上文提供的知识库片段的真实ID
 4. 根据教学需要灵活使用三种来源，不强制要求固定比例
-5. 确保教学内容的质量和完整性，来源标记真实可验证`;
+5. 确保教学内容的质量和完整性，来源标记真实可验证
+6. **必须直接输出纯 JSON，不要使用 markdown 代码块，不要添加任何解释性文字**`;
 
   // Step 7: Generate with validation and retry mechanism
   const MAX_RETRIES = 1;
@@ -440,6 +448,13 @@ ${availableImagesText}
         title: slide.title || `页面 ${index + 1}`,
         description: slide.description,
         type: slide.type,
+        teachingObjective: slide.teachingObjective,
+        visualIntent: slide.visualIntent,
+        preferredLayout: slide.preferredLayout,
+        densityHint: slide.densityHint,
+        suggestedImageIds: Array.isArray(slide.suggestedImageIds)
+          ? slide.suggestedImageIds.filter((id: unknown): id is string => typeof id === 'string').slice(0, 2)
+          : undefined,
         // Normalize keyPoints: support both string[] (old format) and KeyPointWithSource[] (new format)
         keyPoints: (slide.keyPoints || []).map((kp: any) => {
           if (typeof kp === 'string') {

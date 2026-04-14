@@ -8,6 +8,7 @@
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
 import type { TeachingRequest } from '@/lib/types/teaching';
+import { extractIntentSlotsFromMessages } from '@/lib/mappers/intent-message-to-slots';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('TeachingIntentAgent');
@@ -80,6 +81,8 @@ const SYSTEM_PROMPT = `你是一个友好的教学设计助手。你的任务是
    - 从用户的自然语言中提取信息
    - 如果用户一次提供多个信息，全部记录
    - 对模糊信息进行确认
+   - 如果某个字段已经在历史消息中明确出现，绝对不要重复追问该字段
+   - 对“是的”“好的”等确认句，要保留上一轮已识别出的字段，不要丢失
 
 4. **信息确认**：
    - 收集完必填信息后，简要总结
@@ -116,7 +119,9 @@ const SYSTEM_PROMPT = `你是一个友好的教学设计助手。你的任务是
 注意：
 - 保持对话自然流畅
 - 不要机械地按顺序提问
-- 根据上下文灵活调整问题`;
+- 让教师觉得你真的理解了上下文。
+当 topic / subject / gradeLevel / duration 中已有字段明确时，优先自然复述已知信息，再只追问缺失字段或更深一层的教学偏好。
+如果四个必填字段都已完整，优先总结并询问是否开始生成，而不是重新收集基础信息。`;
 
 /**
  * Extract teaching session from conversation history
@@ -126,86 +131,32 @@ function extractSessionFromHistory(messages: ChatMessage[]): TeachingSession {
     ready: false,
   };
 
-  // Extract from all messages (including assistant's summaries)
-  const fullText = messages.map(m => m.content).join('\n');
-  const fullTextLower = fullText.toLowerCase();
+  const intentMessages = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message, index) => ({
+      id: `intent-${index}`,
+      role: message.role === 'user' ? 'teacher' as const : 'ai' as const,
+      title: message.role,
+      content: message.content,
+      meta: '',
+    }));
 
-  // Extract subject
-  const subjects = ['数学', '物理', '化学', '生物', '语文', '英语', '历史', '地理', '政治', '思想政治', '信息技术'];
-  for (const subject of subjects) {
-    if (fullTextLower.includes(subject)) {
-      session.subject = subject;
-      break;
-    }
-  }
+  const { slots } = extractIntentSlotsFromMessages(intentMessages);
 
-  // Extract grade level
-  const gradePatterns = [
-    /([小初高][\u4e00-\u9fa5]{0,2}[一二三四五六七八九十1-9])/g,
-    /(大学本科|研究生|博士)/g,
-  ];
-  for (const pattern of gradePatterns) {
-    const match = fullText.match(pattern);
-    if (match) {
-      session.gradeLevel = match[0];
-      break;
-    }
+  if (slots.subject) {
+    session.subject = slots.subject;
   }
 
-  // Extract duration
-  const durationMatch = fullText.match(/(\d+)\s*分钟/);
-  if (durationMatch) {
-    session.duration = parseInt(durationMatch[1]);
+  if (slots.topic) {
+    session.topic = slots.topic;
   }
 
-  // Extract topic - try multiple strategies
-  
-  // Strategy 1: Look for explicit topic markers in assistant's summary
-  const topicMarkers = [
-    /[*\-\s]*课题[*\-\s]*[：:]\s*(.{2,50})/,
-    /[*\-\s]*主题[*\-\s]*[：:]\s*(.{2,50})/,
-    /[*\-\s]*题目[*\-\s]*[：:]\s*(.{2,50})/,
-  ];
-  
-  for (const pattern of topicMarkers) {
-    const match = fullText.match(pattern);
-    if (match && match[1]) {
-      session.topic = match[1].trim();
-      break;
-    }
+  if (slots.gradeLevel) {
+    session.gradeLevel = slots.gradeLevel;
   }
-  
-  // Strategy 2: Look for patterns in user messages
-  if (!session.topic) {
-    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join('\n');
-    
-    const userTopicPatterns = [
-      /(?:关于|讲|做|生成|介绍)[:：]?\s*(.{2,30}?)(?:[，,。]|$)/,
-      /(?:课题|主题|题目)[是：:]\s*(.{2,30})/,
-    ];
-    
-    for (const pattern of userTopicPatterns) {
-      const match = userMessages.match(pattern);
-      if (match && match[1]) {
-        session.topic = match[1].trim();
-        break;
-      }
-    }
-  }
-  
-  // Strategy 3: If still no topic, try to extract from first substantial user message
-  if (!session.topic) {
-    const firstUserMsg = messages.find(m => m.role === 'user' && m.content.length > 10);
-    if (firstUserMsg) {
-      // Remove common words and extract potential topic
-      const cleaned = firstUserMsg.content
-        .replace(/我想|想要|帮我|请|生成|做|一个|课件|教学设计|PPT|要给学生/g, '')
-        .split(/[，,。]/)[0]
-        .trim();
-      if (cleaned.length > 2 && cleaned.length < 50) {
-        session.topic = cleaned;
-      }
-    }
+
+  if (slots.duration) {
+    session.duration = slots.duration;
   }
 
   return session;
@@ -342,7 +293,7 @@ ${isSessionComplete(session) ? '✓ 必填信息已完整，可以询问用户�
       log.info('LLM indicated ready and session is complete');
       const teachingRequest = sessionToTeachingRequest(session);
       return {
-        reply: '好的！我现在开始为您生成教学设计。请稍候...',
+        reply,
         ready: true,
         teachingRequest,
         session: { ...session, ready: true },

@@ -5,8 +5,7 @@
  * Allows users to modify specific slides without regenerating the entire design
  */
 
-import { nanoid } from 'nanoid';
-import type { TeachingDesign, TeachingSlide, KeyPointWithSource, RagChunk } from '@/lib/types/teaching';
+import type { TeachingDesign, TeachingSlide, KeyPointWithSource } from '@/lib/types/teaching';
 import type { AICallFn } from './pipeline-types';
 import { parseJsonResponse } from './json-repair';
 import { createLogger } from '@/lib/logger';
@@ -29,6 +28,7 @@ interface ParsedInstruction {
 export interface RegenerationOptions {
   design: TeachingDesign;
   instruction: string;
+  activeSlideId?: string;
   aiCall: AICallFn;
   preserveSource?: boolean; // Whether to preserve source tracking (default: true)
 }
@@ -127,6 +127,11 @@ function buildSlideRegenerationPrompt(
   "title": "页面标题",
   "description": "这一页的教学目的（1-2句）",
   "type": "cover" | "content" | "transition" | "end",
+  "teachingObjective": "本页希望学生学会什么或关注什么",
+  "visualIntent": "建议的视觉呈现方式，如图文讲解/对比归纳/步骤拆解/总结回顾",
+  "preferredLayout": "建议版式，如hero/two-column/comparison/steps/summary",
+  "densityHint": "sparse" | "balanced" | "dense",
+  "suggestedImageIds": ["img_1", "img_2"],
   "keyPoints": [
     {
       "content": "本页要点内容",
@@ -145,7 +150,9 @@ function buildSlideRegenerationPrompt(
    - "knowledge": 来自知识库的内容（需要填写 ragChunkId）
 3. 如果原内容有 source 和 ragChunkId，尽量保留（除非用户明确要求修改）
 4. 新增内容默认标记为 source: "teacher"
-5. 保持教学设计的专业性和连贯性`;
+5. 保持教学设计的专业性和连贯性
+6. 尽量保留并优化本页的 teachingObjective、visualIntent、preferredLayout、densityHint
+7. 如果页面适合用图且有图片资源，可输出 suggestedImageIds（0-2个）`;
 
   const userPrompt = `## 课程基本信息
 课题：${design.title}
@@ -255,6 +262,13 @@ async function regenerateSlide(
     title: slideData.title || originalSlide.title,
     description: slideData.description || originalSlide.description,
     type: slideData.type || originalSlide.type,
+    teachingObjective: slideData.teachingObjective || originalSlide.teachingObjective,
+    visualIntent: slideData.visualIntent || originalSlide.visualIntent,
+    preferredLayout: slideData.preferredLayout || originalSlide.preferredLayout,
+    densityHint: slideData.densityHint || originalSlide.densityHint,
+    suggestedImageIds: Array.isArray(slideData.suggestedImageIds)
+      ? slideData.suggestedImageIds.filter((id): id is string => typeof id === 'string').slice(0, 2)
+      : originalSlide.suggestedImageIds,
     keyPoints: normalizedKeyPoints,
     contentBlocks: originalSlide.contentBlocks, // Preserve content blocks (will be regenerated in Stage 2)
     narration: slideData.narration || originalSlide.narration,
@@ -291,19 +305,30 @@ async function regenerateSlide(
 export async function regenerateTeachingDesign(
   options: RegenerationOptions,
 ): Promise<TeachingDesign> {
-  const { design, instruction, aiCall, preserveSource = true } = options;
+  const { design, instruction, activeSlideId, aiCall, preserveSource = true } = options;
 
   log.info('Starting teaching design regeneration:', {
     designId: design.id,
     slideCount: design.slides.length,
     instruction,
+    activeSlideId,
   });
 
   // Step 1: Parse instruction
   const parsed = parseInstruction(instruction, design);
 
+  if ((parsed.targetType === 'unknown' || parsed.targetIndex === undefined) && activeSlideId) {
+    const activeSlideIndex = design.slides.findIndex((slide) => slide.id === activeSlideId);
+    if (activeSlideIndex !== -1) {
+      parsed.targetType = 'slide';
+      parsed.targetIndex = activeSlideIndex;
+      parsed.targetId = activeSlideId;
+      log.info(`Falling back to active slide context: ${activeSlideId} -> ${activeSlideIndex + 1}`);
+    }
+  }
+
   if (parsed.targetType === 'unknown' || parsed.targetIndex === undefined) {
-    throw new Error(`无法解析修改指令："${instruction}"。请明确指定要修改的页面，例如"第3页"或"第一页"`);
+    throw new Error(`无法解析修改指令：“${instruction}”。请选择当前页后直接描述修改要求，或明确指定“第几页”。`);
   }
 
   // Step 2: Validate target
