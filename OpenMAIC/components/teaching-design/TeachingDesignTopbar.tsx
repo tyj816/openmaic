@@ -83,14 +83,7 @@ export function TeachingDesignTopbar({
               </Button>
             </>
           ) : null}
-          <Button variant="outline" className="rounded-xl border-slate-200 bg-white/80" disabled>
-            <Clock3 className="mr-2 h-4 w-4" />
-            历史版本
-          </Button>
-          <Button className="rounded-xl bg-slate-900 shadow-sm hover:bg-slate-800">
-            <Sparkles className="mr-2 h-4 w-4" />
-            发布演示稿
-          </Button>
+          
         </div>
       </div>
     </div>

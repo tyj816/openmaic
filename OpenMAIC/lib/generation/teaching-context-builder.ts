@@ -14,9 +14,8 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('ContextBuilder');
 
 // Context length limits to avoid prompt explosion
-// Note: RAG context limit removed to allow full knowledge base content
 const MAX_MATERIAL_CONTEXT_CHARS = 3000;
-const MAX_RAG_CONTEXT_CHARS = Infinity; // No limit for RAG content
+const MAX_RAG_CONTEXT_CHARS = 8000; // Limit RAG content to prevent slow generation
 
 /**
  * Build teaching context bundle from three sources
@@ -221,11 +220,7 @@ function buildMergedContext(
   sections.push('2. 参考资料中的具体内容和图片资源');
   sections.push('3. 知识库中的专业知识和教学建议');
   sections.push('');
-  sections.push('## 核心约束（必须满足）：');
-  sections.push('1. **至少 30% 内容来自【参考资料】** - 必须明确使用参考资料中的关键术语、概念、图表');
-  sections.push('2. **至少 30% 内容来自【知识库】** - 必须明确使用知识库中的专业概念、教学建议');
-  sections.push('3. **不允许只使用单一来源** - 每个知识点应融合多个来源');
-  sections.push('');
+  // 核心约束已移除，允许灵活使用各种来源
   sections.push('## 内容来源标记要求：');
   sections.push('在生成的 keyPoints 中，每个要点必须标注来源：');
   sections.push('- 使用 "source" 字段标记：\'teacher\' | \'material\' | \'knowledge\'');

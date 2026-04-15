@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { ArrowUp, AudioLines, Loader2, Paperclip, Send, Wand2 } from "lucide-react";
+import { ArrowUp, AudioLines, Loader2, Mic, MicOff, Paperclip, Send, Wand2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
 import { UploadDrawerCard } from "./UploadDrawerCard";
+import { useVoiceRecorder } from "@/lib/hooks/use-voice-recorder";
 import type { IntentMessage, ProjectSummary, UploadedFile } from "@/lib/types/teaching-design-ui";
 
 interface IntentConversationPanelProps {
@@ -52,9 +53,20 @@ export function IntentConversationPanel({
   onUploadImage,
 }: IntentConversationPanelProps) {
   const [showUploadCard, setShowUploadCard] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const docxInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  const { isRecording, isTranscribing, toggleRecording } = useVoiceRecorder({
+    onTranscriptionComplete: (text) => {
+      onInputChange(text);
+      setVoiceError(null);
+    },
+    onError: (errorMessage) => {
+      setVoiceError(errorMessage);
+    },
+  });
 
   const handleSubmit = () => {
     onSendMessage(inputValue);
@@ -166,9 +178,30 @@ export function IntentConversationPanel({
                   </button>
                 </div>
 
-                <Button variant="outline" className="h-12 rounded-2xl border-slate-200 bg-white px-4" disabled>
-                  <AudioLines className="mr-2 h-4 w-4 text-rose-500" />
-                  语音输入
+                <Button 
+                  variant="outline" 
+                  className={`h-12 rounded-2xl border-slate-200 px-4 ${
+                    isRecording ? 'bg-rose-50 border-rose-300' : 'bg-white'
+                  }`}
+                  onClick={toggleRecording}
+                  disabled={isThinking || isGenerating || isTranscribing}
+                >
+                  {isRecording ? (
+                    <>
+                      <MicOff className="mr-2 h-4 w-4 text-rose-500 animate-pulse" />
+                      停止录音
+                    </>
+                  ) : isTranscribing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin text-rose-500" />
+                      识别中...
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="mr-2 h-4 w-4 text-rose-500" />
+                      语音输入
+                    </>
+                  )}
                 </Button>
 
                 <Button className="h-12 rounded-2xl bg-slate-900 px-5 hover:bg-slate-800" onClick={handleSubmit} disabled={isThinking || isGenerating}>
@@ -229,9 +262,9 @@ export function IntentConversationPanel({
               />
             </div>
 
-            {error ? (
+            {error || voiceError ? (
               <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {error}
+                {error || voiceError}
               </div>
             ) : null}
 

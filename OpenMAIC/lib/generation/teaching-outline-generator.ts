@@ -279,10 +279,66 @@ export async function generateTeachingDesignFromRequest(
   }
 
   // Step 6: Build prompt using merged context with enhanced source tracking
-  const systemPrompt = `你是一位经验丰富的教学设计专家。
-你的任务是根据教师需求、参考资料和知识库内容，生成结构化的教学设计。
+  const systemPrompt = `你是一位经验丰富的一线教师，同时也是PPT教学设计专家。
+你的任务不是写教案，而是：👉 生成"适合课堂展示的PPT页面结构"。
 
-输出格式必须是 JSON，包含以下字段：
+-------------------------------------
+【核心目标】
+每一页都必须像"可以直接上课用的PPT"，而不是说明文或教案。
+
+-------------------------------------
+【PPT结构要求（非常重要）】
+每一页必须满足：
+1. 页面结构清晰：
+   - 一个明确标题（简短有力）
+   - 3-5个要点（不能更多）
+
+2. 每个要点必须是：
+   - 一句话表达（10-24字）
+   - 可以直接写在PPT上
+   - 可以被老师讲解展开
+
+3. 内容必须：
+   - 有具体信息（不能空泛）
+   - 有教学意义（不是泛泛总结）
+   - 有逻辑顺序（递进 / 并列 / 对比）
+
+-------------------------------------
+【禁止行为】
+严禁出现：
+❌ 大段文字说明
+❌ "首先…其次…最后…"教案式语言
+❌ 抽象总结（如：培养能力、提升素养）
+❌ 空洞句（如：理解课文内容、掌握知识点）
+
+-------------------------------------
+【内容强化要求】
+每一页至少做到以下之一：
+- 给出"具体例子"
+- 提供"对比关系"
+- 提供"问题引导"
+- 提供"步骤拆解"
+- 提供"课堂互动点"
+
+👉 不允许只写概括性内容
+
+-------------------------------------
+【语言风格】
+- 面向${request.gradeLevel}学生
+- 口语化、课堂化
+- 简短、有节奏
+- 让学生"看得懂、听得进"
+
+-------------------------------------
+【来源融合（弱约束）】
+- 可以使用教师需求、资料、知识库内容
+- 优先保证内容质量
+- 不要为了标注来源而硬塞内容
+- 如果使用了知识库内容，标记 source: "knowledge" 并填写 ragChunkId
+
+-------------------------------------
+【输出格式】
+必须输出 JSON，包含以下字段：
 {
   "title": "课题名称",
   "subject": "学科",
@@ -297,8 +353,8 @@ export async function generateTeachingDesignFromRequest(
   "difficulties": ["教学难点1", "教学难点2"],
   "slides": [
     {
-      "title": "页面标题",
-      "description": "这一页的教学目的（1-2句）",
+      "title": "PPT页面标题（简短有力，5-10字）",
+      "description": "这一页的教学目的（1句话）",
       "type": "cover" | "content" | "transition" | "end",
       "teachingObjective": "本页希望学生学会什么或关注什么",
       "visualIntent": "建议的视觉呈现方式，如图文讲解/对比归纳/步骤拆解/总结回顾",
@@ -307,11 +363,12 @@ export async function generateTeachingDesignFromRequest(
       "suggestedImageIds": ["img_1", "img_2"],
       "keyPoints": [
         {
-          "content": "本页要点内容",
-          "source": "teacher" | "material" | "knowledge"
+          "content": "PPT要点内容（10-24字，一句话，可直接展示）",
+          "source": "teacher" | "material" | "knowledge",
+          "ragChunkId": "chunk_xxx"  // 仅当 source 为 knowledge 时需要
         }
       ],
-      "narration": "教师讲解词（可选）"
+      "narration": "教师讲解词（可选，口语化）"
     }
   ],
   "procedures": [
@@ -328,28 +385,42 @@ export async function generateTeachingDesignFromRequest(
 }
 
 重要说明：
-1. keyPoints 必须使用对象格式，包含 content 和 source 字段
-2. **source 字段标记内容来源（必须严格遵守）：**
-   - "teacher": 仅用于直接来自教师需求和教学目标的内容
-   - "material": 仅用于来自【参考资料内容】部分的内容、术语、概念
-   - "knowledge": 仅用于来自【知识库参考内容】部分的专业知识和教学建议
-3. **当 source 为 "knowledge" 时，必须填写 ragChunkId 字段，值为知识库片段的ID**
-4. **禁止所有内容都标记为同一来源，必须根据实际来源标记**
-5. slides 数组中只需要提供标题和要点，不需要具体的元素布局
-6. 每个 slide 都要补充 teachingObjective、visualIntent、preferredLayout、densityHint
-7. 如果存在可用图片，为每页输出 suggestedImageIds，优先填最适合该页的 0-2 张图片 ID
-8. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
-9. 根据课时合理安排内容量
-10. 如果有可用图片，在 keyPoints 的 content 中标注使用哪些图片（如"使用 img_1 展示..."）
-11. 充分融合参考资料和知识库的内容，确保教学设计的专业性和完整性
+1. **slides[].keyPoints[].content 必须符合 PPT 展示逻辑**：
+   - 每个要点 10-24 字
+   - 一句话表达
+   - 可以直接写在 PPT 上
+   - 不能是教案式说明文字
+2. **每页 3-5 个要点，不能更多**
+3. **内容必须具体、有教学意义**，禁止空洞抽象
+4. source 字段标记内容来源：
+   - "teacher": 来自教师需求和教学目标
+   - "material": 来自参考资料的内容、术语、概念
+   - "knowledge": 来自知识库的专业知识（必须填写 ragChunkId）
+5. 如果有可用图片，在 suggestedImageIds 中标注最适合该页的 0-2 张
+6. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
+7. 根据课时合理安排内容量
 
-三源融合指导原则（灵活建议，非硬性要求）：
-- 如果提供了参考资料，建议适当使用其中的关键术语和概念，标记为 source: "material"
-- 如果提供了知识库内容，建议适当引用其中的专业知识，标记为 source: "knowledge"
-- **必须根据内容实际来源标记，不允许随意标记或全部标记为 teacher**
-- 根据教学场景和内容需要，灵活使用三种来源，不强制要求固定比例
-- **标记为 knowledge 的内容必须能在知识库片段中找到，并正确填写 ragChunkId**
-- 教学质量和内容完整性优先于来源分布比例`;
+【示例对比】
+
+❌ 错误示例（教案式、空洞）：
+{
+  "title": "课文分析",
+  "keyPoints": [
+    {"content": "首先，我们要理解课文的主要内容和中心思想，把握文章的整体结构"},
+    {"content": "其次，要掌握文章的写作手法和表达技巧，学习作者的表达方式"},
+    {"content": "最后，要培养学生的阅读理解能力和审美情趣，提升语文素养"}
+  ]
+}
+
+✅ 正确示例（PPT式、具体）：
+{
+  "title": "荷塘月色",
+  "keyPoints": [
+    {"content": "月光下的荷塘：静谧、朦胧、如梦似幻", "source": "material"},
+    {"content": "作者心境：不宁静 → 暂时宁静 → 回到现实", "source": "teacher"},
+    {"content": "写作手法：通感（"光与影有着和谐的旋律"）", "source": "knowledge", "ragChunkId": "chunk_123"}
+  ]
+}`;
 
   // Use merged context from three-source bundle
   const userPrompt = `${contextBundle.mergedContext}
@@ -366,7 +437,32 @@ ${availableImagesText}
 3. ragChunkId 必须是上文提供的知识库片段的真实ID
 4. 根据教学需要灵活使用三种来源，不强制要求固定比例
 5. 确保教学内容的质量和完整性，来源标记真实可验证
-6. **必须直接输出纯 JSON，不要使用 markdown 代码块，不要添加任何解释性文字**`;
+6. **必须直接输出纯 JSON，不要使用 markdown 代码块，不要添加任何解释性文字**
+
+---
+
+【重要补充要求】
+
+请特别注意：
+
+1. 每一页内容必须“像PPT”，而不是教案：
+   - 控制要点数量（3-5条）
+   - 每条必须是简洁表达
+
+2. 每页至少包含一个：
+   - 具体例子 / 情境
+   - 或课堂提问
+   - 或对比关系
+
+3. 不要生成空泛内容，例如：
+   - 理解内容
+   - 掌握知识
+   - 提高能力
+
+4. 优先生成：
+   👉 老师可以直接照着讲的内容
+   👉 学生一看就能理解的表达
+`;
 
   // Step 7: Generate with validation and retry mechanism
   const MAX_RETRIES = 1;

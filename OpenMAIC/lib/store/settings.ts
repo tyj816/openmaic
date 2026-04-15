@@ -287,11 +287,13 @@ const getDefaultPDFConfig = () => ({
 
 // Initialize default Image config
 const getDefaultImageConfig = () => ({
-  imageProviderId: 'seedream' as ImageProviderId,
-  imageModelId: 'doubao-seedream-5-0-260128',
+  // imageProviderId: 'seedream' as ImageProviderId,
+  // imageModelId: 'doubao-seedream-5-0-260128',
+  imageProviderId: 'qwen-image' as ImageProviderId,
+  imageModelId: 'qwen-image-plus',
   imageProvidersConfig: {
     seedream: { apiKey: '', baseUrl: '', enabled: false },
-    'qwen-image': { apiKey: '', baseUrl: '', enabled: false },
+    'qwen-image': { apiKey: '', baseUrl: '', enabled: true },
     'nano-banana': { apiKey: '', baseUrl: '', enabled: false },
     'grok-image': { apiKey: '', baseUrl: '', enabled: false },
   } as Record<ImageProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
@@ -542,8 +544,8 @@ export const useSettingsStore = create<SettingsState>()(
         // Video settings (use defaults)
         ...defaultVideoConfig,
 
-        // Media generation toggles (off by default)
-        imageGenerationEnabled: false,
+        // Media generation toggles (image enabled by default for teaching)
+        imageGenerationEnabled: true,
         videoGenerationEnabled: false,
 
         // Audio feature toggles (on by default)

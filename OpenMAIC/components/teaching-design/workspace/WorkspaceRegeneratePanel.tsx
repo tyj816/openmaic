@@ -136,10 +136,6 @@ export function WorkspaceRegeneratePanel({
               {error}
             </div>
           ) : null}
-
-          <div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/70 px-4 py-3 text-sm text-violet-800">
-            仅修改当前 slide，不影响整体结构。
-          </div>
         </div>
       </CardContent>
     </Card>
