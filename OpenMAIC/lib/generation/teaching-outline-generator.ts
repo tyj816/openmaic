@@ -238,6 +238,38 @@ export async function generateTeachingDesignFromRequest(
     mergedChars: contextBundle.mergedContext.length,
   });
 
+  // Step 4.5: Build media generation policy
+  const imageEnabled = request.enableImageGeneration ?? false;
+  let mediaGenerationPolicy = '';
+  
+  if (!imageEnabled) {
+    mediaGenerationPolicy = `
+**重要提示：图片生成已禁用**
+- 不要在 slides 中添加 mediaGenerations 数组
+- 只能使用 suggestedImageIds 引用已有的 PDF 图片
+`;
+  } else {
+    mediaGenerationPolicy = `
+**图片生成策略**
+- 当某页幻灯片需要图片但 PDF 中没有合适的图片时，可以添加 mediaGenerations 数组
+- 每个图片生成请求包含：
+  - type: "image"
+  - prompt: 英文描述（给图片生成模型用，描述要具体、详细）
+  - elementId: 唯一 ID（格式：gen_img_1, gen_img_2，全局唯一）
+  - aspectRatio: 宽高比（默认 "16:9"）
+- 示例：
+  "mediaGenerations": [
+    {
+      "type": "image",
+      "prompt": "A colorful diagram showing the process scheduling algorithms comparison with FCFS, SJF, and Round Robin",
+      "elementId": "gen_img_1",
+      "aspectRatio": "16:9"
+    }
+  ]
+- 注意：prompt 必须是英文，描述要详细具体，包含关键元素和风格
+`;
+  }
+
   // Step 5: Build available images description for prompt
   const allImages = contextBundle.extractedFromMaterials.availableImages;
   let availableImagesText =
@@ -337,6 +369,9 @@ export async function generateTeachingDesignFromRequest(
 - 如果使用了知识库内容，标记 source: "knowledge" 并填写 ragChunkId
 
 -------------------------------------
+${mediaGenerationPolicy}
+
+-------------------------------------
 【输出格式】
 必须输出 JSON，包含以下字段：
 {
@@ -361,6 +396,14 @@ export async function generateTeachingDesignFromRequest(
       "preferredLayout": "建议版式，如hero/two-column/comparison/steps/summary",
       "densityHint": "sparse" | "balanced" | "dense",
       "suggestedImageIds": ["img_1", "img_2"],
+      "mediaGenerations": [  // 🆕 可选字段，仅当需要生成图片时添加
+        {
+          "type": "image",
+          "prompt": "English description for image generation (detailed and specific)",
+          "elementId": "gen_img_1",
+          "aspectRatio": "16:9"
+        }
+      ],
       "keyPoints": [
         {
           "content": "PPT要点内容（10-24字，一句话，可直接展示）",
@@ -397,8 +440,9 @@ export async function generateTeachingDesignFromRequest(
    - "material": 来自参考资料的内容、术语、概念
    - "knowledge": 来自知识库的专业知识（必须填写 ragChunkId）
 5. 如果有可用图片，在 suggestedImageIds 中标注最适合该页的 0-2 张
-6. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
-7. 根据课时合理安排内容量
+6. **mediaGenerations 字段（可选）**：当需要生成图片时添加，prompt 必须是英文且详细具体
+7. procedures 应该包含完整的教学环节（导入、新授、巩固、小结等）
+8. 根据课时合理安排内容量
 
 【示例对比】
 
@@ -419,6 +463,14 @@ export async function generateTeachingDesignFromRequest(
     {"content": "月光下的荷塘：静谧、朦胧、如梦似幻", "source": "material"},
     {"content": "作者心境：不宁静 → 暂时宁静 → 回到现实", "source": "teacher"},
     {"content": "写作手法：通感（"光与影有着和谐的旋律"）", "source": "knowledge", "ragChunkId": "chunk_123"}
+  ],
+  "mediaGenerations": [
+    {
+      "type": "image",
+      "prompt": "A serene moonlit lotus pond with soft lighting, misty atmosphere, traditional Chinese painting style",
+      "elementId": "gen_img_1",
+      "aspectRatio": "16:9"
+    }
   ]
 }`;
 
@@ -550,6 +602,10 @@ ${availableImagesText}
         densityHint: slide.densityHint,
         suggestedImageIds: Array.isArray(slide.suggestedImageIds)
           ? slide.suggestedImageIds.filter((id: unknown): id is string => typeof id === 'string').slice(0, 2)
+          : undefined,
+        // 🆕 Pass through mediaGenerations from LLM response
+        mediaGenerations: Array.isArray(slide.mediaGenerations)
+          ? slide.mediaGenerations.filter((mg: any) => mg && mg.type === 'image' && mg.elementId && mg.prompt)
           : undefined,
         // Normalize keyPoints: support both string[] (old format) and KeyPointWithSource[] (new format)
         keyPoints: (slide.keyPoints || []).map((kp: any) => {

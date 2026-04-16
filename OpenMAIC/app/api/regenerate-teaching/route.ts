@@ -64,12 +64,12 @@ export async function POST(req: NextRequest) {
       slideCount: design.slides.length,
     });
 
-    // 使用传入的模型配置或默认 GLM
+    // 使用传入的模型配置或默认 Qwen
     const modelConfig = {
-      providerId: 'glm' as const,
-      modelId: modelString?.split(':')[1] || 'glm-4.7',
-      apiKey: apiKey || process.env.GLM_API_KEY || '',
-      baseUrl: baseUrl || process.env.GLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
+      providerId: (modelString?.split(':')[0] as any) || 'qwen' as const,
+      modelId: modelString?.split(':')[1] || 'qwen3.5-flash',
+      apiKey: apiKey || process.env.QWEN_API_KEY || '',
+      baseUrl: baseUrl || process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       providerType: 'openai' as const,
       requiresApiKey: true,
     };
@@ -122,11 +122,11 @@ export async function POST(req: NextRequest) {
           imageMapping,
           visionEnabled: false,
           language,
-          modelString,
-          apiKey,
-          baseUrl,
-          providerType: 'openai',
-          requiresApiKey: true,
+          modelString: modelString || `${modelConfig.providerId}:${modelConfig.modelId}`,
+          apiKey: modelConfig.apiKey,
+          baseUrl: modelConfig.baseUrl,
+          providerType: modelConfig.providerType,
+          requiresApiKey: modelConfig.requiresApiKey,
         }),
       });
 

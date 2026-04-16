@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useExportTeachingPPTX } from "@/lib/export/use-export-teaching-pptx";
+import { useMediaGenerationStore } from "@/lib/store/media-generation"; // 🆕 Import media generation store
 import { TeachingDesignTopbar } from "@/components/teaching-design/TeachingDesignTopbar";
 import { WorkspaceSidebar } from "@/components/teaching-design/workspace/WorkspaceSidebar";
 import { WorkspacePreviewPanel } from "@/components/teaching-design/workspace/WorkspacePreviewPanel";
@@ -29,6 +30,14 @@ export default function TeachingDesignWorkspacePage() {
     setCurrentDesign(draft);
     setActiveSlideId(draft?.slides[0]?.id || "");
     setIsHydrated(true);
+
+    // 🆕 Restore media generation state from IndexedDB
+    if (draft?.id) {
+      const stageId = `teaching_${draft.id}`;
+      useMediaGenerationStore.getState().restoreFromDB(stageId).catch(err => {
+        console.error('Failed to restore media generation state:', err);
+      });
+    }
   }, []);
 
   useEffect(() => {

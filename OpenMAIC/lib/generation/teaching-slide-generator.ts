@@ -86,6 +86,18 @@ export async function generateSlideFromTeachingSlide(
     }
   }
 
+  // 🆕 Add AI generated image placeholder information
+  if (teachingSlide.mediaGenerations && teachingSlide.mediaGenerations.length > 0) {
+    const genImgDescs = teachingSlide.mediaGenerations
+      .filter(mg => mg.type === 'image')
+      .map(mg => `- **${mg.elementId}**: "${mg.prompt}" (宽高比: ${mg.aspectRatio || '16:9'})`)
+      .join('\n');
+    
+    if (genImgDescs) {
+      assignedImagesText += `\n\n**AI 生成图片占位符（将在生成后替换）**:\n${genImgDescs}\n注意：在 elements 中使用这些 elementId 作为 src，例如 {"type": "image", "src": "${teachingSlide.mediaGenerations[0].elementId}", ...}`;
+    }
+  }
+
   // Canvas dimensions
   const canvasWidth = 1000;
   const canvasHeight = 562.5;

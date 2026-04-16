@@ -6,6 +6,7 @@
  */
 
 import type { Slide, PPTElement, SlideBackground } from './slides';
+import type { MediaGenerationRequest } from '@/lib/media/types';
 
 // ==================== Input Types ====================
 
@@ -41,6 +42,9 @@ export interface TeachingRequest {
 
   // Language
   language: 'zh-CN' | 'en-US';
+
+  // 🆕 Image generation toggle
+  enableImageGeneration?: boolean;
 }
 
 /**
@@ -135,6 +139,9 @@ export interface TeachingSlide {
   preferredLayout?: string; // Preferred layout family for PPT generation
   densityHint?: 'sparse' | 'balanced' | 'dense'; // Content density hint for layout
   suggestedImageIds?: string[]; // Preferred images for this slide
+
+  // 🆕 AI generated media requests (image generation)
+  mediaGenerations?: MediaGenerationRequest[];
 
   // Teaching content with source tracking
   keyPoints: KeyPointWithSource[];

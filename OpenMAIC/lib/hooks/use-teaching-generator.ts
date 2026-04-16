@@ -5,15 +5,16 @@
  * 
  * Flow:
  * 1. TeachingRequest → generateTeachingDesign (outline)
- * 2. For each slide → generate canvas
- * 3. Return complete TeachingDesign
+ * 2. Launch media generation in background (if enabled)
+ * 3. For each slide → generate canvas
+ * 4. Return complete TeachingDesign
  */
 
 import { useState, useCallback } from 'react';
-import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
 import type { TeachingRequest, TeachingDesign, ReferenceMaterial } from '@/lib/types/teaching';
 import type { ImageMapping } from '@/lib/types/generation';
+import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('TeachingGenerator');
@@ -101,6 +102,37 @@ export function useTeachingGenerator() {
           progress: 50,
           statusMessage: '教学大纲生成完成，开始生成课件页面...',
         }));
+
+        // 🆕 Stage 1.5: Launch media generation in background (if enabled)
+        if (request.enableImageGeneration) {
+          log.info('Image generation enabled, starting media generation in background');
+          
+          // Convert TeachingSlide[] to SceneOutline[] format for media orchestrator
+          const outlines = design.slides
+            .filter((slide: any) => slide.mediaGenerations && slide.mediaGenerations.length > 0)
+            .map((slide: any) => ({
+              id: slide.id,
+              title: slide.title,
+              description: slide.description || '',
+              type: 'slide' as const,
+              keyPoints: slide.keyPoints.map((kp: any) => typeof kp === 'string' ? kp : kp.content),
+              mediaGenerations: slide.mediaGenerations,
+            }));
+          
+          if (outlines.length > 0) {
+            // Generate unique stageId for this teaching design
+            const stageId = `teaching_${design.id}`;
+            
+            log.info(`Launching media generation for ${outlines.length} slides with media requests`);
+            
+            // Launch media generation (async, don't wait)
+            generateMediaForOutlines(outlines, stageId).catch(err => {
+              log.error('Media generation failed:', err);
+            });
+          } else {
+            log.info('No media generation requests found in design');
+          }
+        }
 
         // Stage 2: Generate canvas for each slide via API
         log.info('Stage 2: Generating canvas for each slide');

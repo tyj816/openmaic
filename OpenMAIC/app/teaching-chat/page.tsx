@@ -15,6 +15,8 @@ import type { ReferenceMaterial, ParsedImage } from '@/lib/types/teaching';
 import { nanoid } from 'nanoid';
 import { createLogger } from '@/lib/logger';
 import { MessageContent } from '@/components/teaching-chat/MessageContent';
+import { useMediaGenerationStore } from '@/lib/store/media-generation'; // 🆕 Import media generation store
+import { generateMediaForOutlines } from '@/lib/media/media-orchestrator'; // 🆕 Import media orchestrator
 
 const log = createLogger('TeachingChat');
 
@@ -34,6 +36,18 @@ export default function TeachingChatPage() {
   const generator = useTeachingGenerator();
   const exporter = useExportTeachingPPTX();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 🆕 Subscribe to media generation state
+  const mediaTasks = useMediaGenerationStore(state => state.tasks);
+  const pendingMedia = Object.values(mediaTasks).filter(t => 
+    t.status === 'pending' || t.status === 'generating'
+  );
+  const completedMedia = Object.values(mediaTasks).filter(t => 
+    t.status === 'done'
+  );
+  const failedMedia = Object.values(mediaTasks).filter(t => 
+    t.status === 'failed'
+  );
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -195,7 +209,7 @@ export default function TeachingChatPage() {
         // Configure model for generation
         const modelConfig = {
           providerId: 'glm' as const,
-          modelId: 'glm-4.7',
+          modelId: 'glm-5',
           apiKey: 'a61159bfaa7949b98ca9863e4350217b.qZiaDB1pjuLuuADv',
           baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
           providerType: 'openai' as const,
@@ -213,19 +227,54 @@ export default function TeachingChatPage() {
         });
         
         // Start generation
-        const design = await generator.generate(response.teachingRequest, {
-          model,
-          materials,
-          imageMapping,
-          modelString: 'glm:glm-4.7',
-          apiKey: modelConfig.apiKey,
-          baseUrl: modelConfig.baseUrl,
-          providerType: modelConfig.providerType,
-          requiresApiKey: modelConfig.requiresApiKey,
-          visionEnabled: false,
-        });
+        const design = await generator.generate(
+          {
+            ...response.teachingRequest,
+            enableImageGeneration: true, // 🆕 Enable image generation
+          },
+          {
+            model,
+            materials,
+            imageMapping,
+            modelString: 'qwen:qwen3.5-flash',
+            apiKey: modelConfig.apiKey,
+            baseUrl: modelConfig.baseUrl,
+            providerType: modelConfig.providerType,
+            requiresApiKey: modelConfig.requiresApiKey,
+            visionEnabled: false,
+          }
+        );
 
         if (design) {
+          // 🆕 Launch media generation in background (if enabled)
+          if (response.teachingRequest.enableImageGeneration) {
+            log.info('Launching media generation for teaching design');
+            
+            // Convert TeachingSlide[] to SceneOutline[] format
+            const outlines = design.slides
+              .filter((slide: any) => slide.mediaGenerations && slide.mediaGenerations.length > 0)
+              .map((slide: any) => ({
+                id: slide.id,
+                title: slide.title,
+                description: slide.description || '',
+                type: 'slide' as const,
+                keyPoints: slide.keyPoints.map((kp: any) => typeof kp === 'string' ? kp : kp.content),
+                mediaGenerations: slide.mediaGenerations,
+              }));
+            
+            if (outlines.length > 0) {
+              const stageId = `teaching_${design.id}`;
+              log.info(`Starting media generation for ${outlines.length} slides, stageId: ${stageId}`);
+              
+              // Launch media generation (async, don't wait)
+              generateMediaForOutlines(outlines, stageId).catch(err => {
+                log.error('Media generation failed:', err);
+              });
+            } else {
+              log.info('No media generation requests found in design');
+            }
+          }
+          
           const successMessage: ChatMessage = {
             role: 'assistant',
             content: '✅ 教学设计生成完成！你可以在下方查看详情，或者导出为 PPT。',
@@ -314,6 +363,33 @@ export default function TeachingChatPage() {
                 >
                   ✕
                 </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 🆕 Image Generation Progress */}
+      {(pendingMedia.length > 0 || completedMedia.length > 0 || failedMedia.length > 0) && (
+        <div className="bg-purple-50 border-b px-6 py-3">
+          <div className="text-sm font-medium mb-2">
+            🎨 图片生成进度 ({completedMedia.length}/{pendingMedia.length + completedMedia.length + failedMedia.length})
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.values(mediaTasks).map(task => (
+              <div
+                key={task.elementId}
+                className={`px-3 py-1 rounded text-xs ${
+                  task.status === 'done' ? 'bg-green-100 text-green-800' :
+                  task.status === 'generating' ? 'bg-yellow-100 text-yellow-800 animate-pulse' :
+                  task.status === 'failed' ? 'bg-red-100 text-red-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}
+                title={task.status === 'failed' ? task.error : task.prompt}
+              >
+                {task.status === 'done' ? '✓' :
+                 task.status === 'generating' ? '⏳' :
+                 task.status === 'failed' ? '✗' : '⋯'} {task.elementId}
               </div>
             ))}
           </div>
