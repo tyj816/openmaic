@@ -14,6 +14,7 @@ import { getModel } from '@/lib/ai/providers';
 import type { ReferenceMaterial, ParsedImage } from '@/lib/types/teaching';
 import { nanoid } from 'nanoid';
 import { createLogger } from '@/lib/logger';
+import { MessageContent } from '@/components/teaching-chat/MessageContent';
 
 const log = createLogger('TeachingChat');
 
@@ -333,7 +334,7 @@ export default function TeachingChatPage() {
                   : 'bg-white border shadow-sm'
               }`}
             >
-              <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+              <MessageContent content={message.content} />
             </div>
           </div>
         ))}

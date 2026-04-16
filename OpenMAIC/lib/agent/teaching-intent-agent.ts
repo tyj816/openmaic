@@ -124,9 +124,72 @@ const SYSTEM_PROMPT = `你是一个友好的教学设计助手。你的任务是
 如果四个必填字段都已完整，优先总结并询问是否开始生成，而不是重新收集基础信息。`;
 
 /**
- * Extract teaching session from conversation history
+ * Extract teaching session from conversation history using LLM
  */
-function extractSessionFromHistory(messages: ChatMessage[]): TeachingSession {
+async function extractSessionFromHistoryWithLLM(
+  messages: ChatMessage[],
+  model: LanguageModel
+): Promise<TeachingSession> {
+  const conversationText = messages
+    .map(m => `${m.role === 'user' ? '教师' : '助手'}: ${m.content}`)
+    .join('\n');
+
+  const extractionPrompt = `分析以下对话，提取教学需求信息。请仔细阅读对话内容，提取所有明确提到的信息。
+
+对话内容：
+${conversationText}
+
+请提取以下信息（如果对话中明确提到，就提取；如果没有提到，返回 null）：
+- topic: 课题/主题（例如："进程调度算法"）
+- subject: 学科（例如："操作系统"、"数学"、"物理"等，任何学科都可以）
+- gradeLevel: 年级（例如："二年级"、"初三"、"高一"等）
+- duration: 课时时长（数字，单位分钟，例如：45）
+
+注意：
+1. subject 可以是任何学科，不限于常见学科
+2. 如果用户说"是的"、"对"等确认词，要结合上下文判断确认的是什么
+3. 只提取明确提到的信息，不要推测
+
+请直接返回 JSON 格式，不要使用 markdown 代码块，例如：
+{"topic": "进程调度算法", "subject": "操作系统", "gradeLevel": "二年级", "duration": 45}`;
+
+  try {
+    const result = await generateText({
+      model,
+      messages: [
+        { role: 'system', content: '你是一个信息提取助手，从对话中提取结构化信息。' },
+        { role: 'user', content: extractionPrompt }
+      ],
+      maxRetries: 2,
+    });
+
+    // Clean up markdown code blocks if present
+    let jsonText = result.text.trim();
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    } else if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
+
+    const extracted = JSON.parse(jsonText.trim());
+    
+    return {
+      topic: extracted.topic || undefined,
+      subject: extracted.subject || undefined,
+      gradeLevel: extracted.gradeLevel || undefined,
+      duration: extracted.duration || undefined,
+      ready: false,
+    };
+  } catch (error) {
+    log.warn('LLM extraction failed, falling back to keyword extraction:', error);
+    return extractSessionFromHistoryKeyword(messages);
+  }
+}
+
+/**
+ * Extract teaching session from conversation history using keywords (fallback)
+ */
+function extractSessionFromHistoryKeyword(messages: ChatMessage[]): TeachingSession {
   const session: TeachingSession = {
     ready: false,
   };
@@ -222,8 +285,8 @@ export async function handleTeachingConversation(
   try {
     log.info('Starting conversation handling with', messages.length, 'messages');
     
-    // Extract current session state from history
-    const session = extractSessionFromHistory(messages);
+    // Extract current session state from history using LLM
+    const session = await extractSessionFromHistoryWithLLM(messages, model);
     log.info('Extracted session:', session);
 
     // Check if user is confirming to start generation
@@ -278,8 +341,7 @@ ${isSessionComplete(session) ? '✓ 必填信息已完整，可以询问用户�
     const result = await generateText({
       model,
       messages: fullMessages,
-      temperature: 0.7,
-      maxTokens: 500,
+      maxRetries: 2,
     });
 
     const reply = result.text.trim();
@@ -370,8 +432,7 @@ ${messages.map(m => `${m.role}: ${m.content}`).join('\n')}
       messages: [
         { role: 'system' as const, content: extractionPrompt },
       ],
-      temperature: 0.3,
-      maxTokens: 500,
+      maxRetries: 2,
     });
 
     // Parse extracted session
@@ -389,8 +450,8 @@ ${messages.map(m => `${m.role}: ${m.content}`).join('\n')}
         ready: false,
       };
     } catch (e) {
-      log.warn('Failed to parse extracted session, using keyword extraction:', e);
-      session = extractSessionFromHistory(messages);
+      log.warn('Failed to parse extracted session, using LLM extraction:', e);
+      session = await extractSessionFromHistoryWithLLM(messages, model);
     }
 
     // Check if ready
@@ -430,8 +491,7 @@ ${isSessionComplete(session) ? '✓ 必填信息已完整，可以询问用户�
     const result = await generateText({
       model,
       messages: fullMessages,
-      temperature: 0.7,
-      maxTokens: 500,
+      maxRetries: 2,
     });
 
     return {
